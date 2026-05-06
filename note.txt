@@ -1,0 +1,22 @@
+Tables ->
+
+User Details -> 
+UserID, Username, Password, LOGGEDIN
+
+Shipment Details ->
+id, item name, quantity, source, destination, status
+
+status = "pending", "packed", "intransit", "delayed", "delivered" 
+
+Actions ->
+First create a TABLE 
+
+POST auth/signup
+POST auth/login 
+GET auth/logout
+
+POST shipment/:userID/send
+UPDATE shipment/:userID/statusChange
+DELETE shipment/:userID/deleteShipment/:id
+GET shipment/:userID/getShipments
+GET shipment/
