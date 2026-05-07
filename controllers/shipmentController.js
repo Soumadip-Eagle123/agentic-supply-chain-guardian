@@ -1,4 +1,5 @@
 import db from '../db/db.js'
+import axios from 'axios'
 
 async function getUsername(userID) {
     const { data } = await db
@@ -15,14 +16,39 @@ export async function postShipment(req, res) {
         return res.status(401).json({ Error: "Please login first!" });
 
     let { product_name, quantity, source, destination, status } = req.body;
+    
     if (!product_name || !quantity || !source || !destination)
-        return res.status(400).json({ error: "Please enter all the details of the shipment" });
+        return res.status(400).json({ error: "Please enter all details" });
 
     try {
-        await db.from('shipments').insert({ userID, product_name, quantity, source, destination, status });
-        res.status(201).json({ Success: `Shipment details for User ${await getUsername(userID)} added!` });
+        
+        const aiResponse = await axios.post('http://ai-service:8000/analyze', {
+            product_name,
+            quantity,
+            source,
+            destination,
+            status: status || "Pending"
+        });
+
+        const riskValue = aiResponse.data.risk_level;
+
+        await db.from('shipments').insert({ 
+            userID, 
+            product_name, 
+            quantity, 
+            source, 
+            destination, 
+            status,
+            risk: riskValue 
+        });
+
+        res.status(201).json({ 
+            Success: `Shipment added with ${riskValue} risk level!`,
+            analysis: aiResponse.data.reasoning
+        });
     } catch (err) {
-        res.status(500).json({ Error: "Couldn't add shipment for the user" });
+        console.error(err);
+        res.status(500).json({ Error: "AI Service unreachable or DB error" });
     }
 }
 

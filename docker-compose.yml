@@ -10,3 +10,14 @@ services:
       - /app/node_modules
     env_file:
       - .env
+    depends_on:
+      - ai-service
+  
+  ai-service:
+    build: ./ai-service
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./ai-service:/app
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # This maps the name to your host IP
