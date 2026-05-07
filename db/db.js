@@ -1,8 +1,15 @@
-import Database from 'better-sqlite3'
-import path from 'node:path'
+import { createClient } from '@supabase/supabase-js'
+import 'dotenv/config'
+import ws from 'ws'
 
-const dbPath = path.join('database.db')
+const db = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_KEY,
+  {
+    realtime: {
+      transport: ws
+    }
+  }
+)
 
-const db = new Database(dbPath)
-
-export default db;
+export default db

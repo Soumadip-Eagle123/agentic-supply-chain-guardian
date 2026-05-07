@@ -5,10 +5,8 @@ const PORT = 8000
 const secret = 'jellyfish-baskingshark'
 import { authRouter } from './routes/auth.js'
 import { shipmentRouter, allRouter } from './routes/shipment.js'
-import { createTables } from './createTables.js'
-createTables();
 app.use(express.json()) 
-
+console.log(process.env.SUPABASE_URL)
 app.use(session({
   secret: secret,
   resave: false, 
