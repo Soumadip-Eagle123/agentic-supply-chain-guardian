@@ -16,9 +16,23 @@ export async function postShipment(req, res) {
         return res.status(401).json({ Error: "Please login first!" });
 
     let { product_name, quantity, source, destination, status } = req.body;
+    status = status || "Pending";
     
     if (!product_name || !quantity || !source || !destination)
         return res.status(400).json({ error: "Please enter all details" });
+
+    const { data: stockData } = await db.from('inventory').select('current_stock').eq('product_name', product_name).single();
+    const { data: thresholdData } = await db.from('inventory').select('min_threshold').eq('product_name', product_name).single();
+    if (!stockData || stockData.current_stock === undefined)
+        return res.status(400).json({ error: "Product not found in inventory" });
+    if (!thresholdData || thresholdData.min_threshold === undefined)
+        return res.status(400).json({ error: "Inventory threshold not found for product" });
+    if (quantity > stockData.current_stock)
+        return res.status(400).json({ error: "Insufficient stock available" });
+
+    await db.from('inventory')
+        .update({ current_stock: stockData.current_stock - quantity })
+        .eq('product_name', product_name);
 
     try {
         
@@ -27,7 +41,9 @@ export async function postShipment(req, res) {
             quantity,
             source,
             destination,
-            status: status || "Pending"
+            status: status || "Pending",
+            stock: stockData.current_stock,
+            Minimum_threshold: thresholdData.min_threshold
         });
 
         const riskValue = aiResponse.data.risk_level;
@@ -46,6 +62,7 @@ export async function postShipment(req, res) {
 
         res.status(201).json({ 
             Success: `Shipment added with ${riskValue} risk level!`,
+            Change_in_inventory: `Stock reduced from ${stockData.current_stock} to ${stockData.current_stock - quantity} for product ${product_name}`,
             analysis: aiResponse.data.reasoning,
             AI_Action: `Recommended action: ${ai_action}`
         });
@@ -75,12 +92,19 @@ export async function updateShipment(req, res) {
             if (!data_returned || !data_returned.product_name)
                 return res.status(400).json({ Error: "No such shipment id exists!" });
 
+        const { data: stock } = await db.from('inventory').select('current_stock').eq('product_name', data_returned.product_name).single();
+        const { data: minimum_threshold } = await db.from('inventory').select('min_threshold').eq('product_name', data_returned.product_name).single();
+        if (!stock || stock.current_stock === undefined || !minimum_threshold || minimum_threshold.min_threshold === undefined)
+            return res.status(400).json({ Error: "Inventory data not found for the product!" });
+
         const aiResponse = await axios.post('http://ai-service:8000/analyze', {
             product_name: data_returned.product_name,
             quantity: data_returned.quantity,
             source: data_returned.source,
             destination: data_returned.destination,
-            status
+            status,
+            stock: stock.current_stock,
+            Minimum_threshold: minimum_threshold.min_threshold
         });
 
         const riskValue = aiResponse.data.risk_level;
@@ -168,8 +192,8 @@ export async function allShipments(req, res) {
 
         let resultsJSON = {};
         results.forEach(result => {
-            resultsJSON[result.userID] = {
-                id: result.id,
+            resultsJSON[result.id] = {
+                userID: result.userID,
                 product_name: result.product_name,
                 quantity: result.quantity,
                 source: result.source,
@@ -183,5 +207,32 @@ export async function allShipments(req, res) {
         res.status(200).json(resultsJSON);
     } catch (err) {
         res.status(500).json({ Error: "Couldn't get the shipments!" });
+    }
+}
+
+export async function updateInventory(req, res) {
+    const userID = Number(req.params.userID);
+    if (userID != req.session.userId)
+        return res.status(401).json({ Error: "Please login first!" });
+
+    let { product_name, quantity, min_threshold } = req.body;
+    if (!product_name || !quantity || !min_threshold)
+        return res.status(400).json({ error: "Please enter all the details to update inventory" });
+    
+    try {
+        const { data } = await db
+            .from('inventory')
+            .select('*')
+            .eq('product_name', product_name);  
+        if (!data || data.length === 0){
+            await db.from('inventory').insert({ product_name, current_stock: quantity, min_threshold });
+            return res.status(201).json({ Success: `Inventory added for product ${product_name}!` });
+        }
+        await db.from('inventory')
+            .update({ current_stock: quantity, min_threshold })
+            .eq('product_name', product_name);
+        res.status(201).json({ Success: `Inventory updated for product ${product_name}!` });
+    } catch (err) {
+        res.status(500).json({ Error: "Couldn't update inventory for the product" });
     }
 }
