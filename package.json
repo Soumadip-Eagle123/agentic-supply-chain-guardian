@@ -19,7 +19,11 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "express-session": "^1.19.0",
+    "fastapi": "^0.0.8",
+    "ollama": "^0.6.3",
     "pg": "^8.20.0",
+    "pydantic": "^0.0.1-security",
+    "uvicorn": "^0.0.1-security",
     "validator": "^13.15.35",
     "ws": "^8.20.0"
   },

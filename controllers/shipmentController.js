@@ -31,6 +31,7 @@ export async function postShipment(req, res) {
         });
 
         const riskValue = aiResponse.data.risk_level;
+        const ai_action = aiResponse.data.ai_action;
 
         await db.from('shipments').insert({ 
             userID, 
@@ -39,12 +40,14 @@ export async function postShipment(req, res) {
             source, 
             destination, 
             status,
-            risk: riskValue 
+            risk: riskValue,
+            ai_action
         });
 
         res.status(201).json({ 
             Success: `Shipment added with ${riskValue} risk level!`,
-            analysis: aiResponse.data.reasoning
+            analysis: aiResponse.data.reasoning,
+            AI_Action: `Recommended action: ${ai_action}`
         });
     } catch (err) {
         console.error(err);
@@ -60,11 +63,31 @@ export async function updateShipment(req, res) {
     let { id, status } = req.body;
     if (!id || !status)
         return res.status(400).json({ error: "Please enter all the details to update shipment" });
-
+    
+    
     try {
+        let { data: data_returned } = await db
+        .from('shipments')
+        .select('product_name', 'quantity', 'source', 'destination')
+        .eq('id', id)
+        .eq('"userID"', userID)
+        .single();
+            if (!data_returned || !data_returned.product_name)
+                return res.status(400).json({ Error: "No such shipment id exists!" });
+
+        const aiResponse = await axios.post('http://ai-service:8000/analyze', {
+            product_name: data_returned.product_name,
+            quantity: data_returned.quantity,
+            source: data_returned.source,
+            destination: data_returned.destination,
+            status
+        });
+
+        const riskValue = aiResponse.data.risk_level;
+        const ai_action = aiResponse.data.ai_action;
         const { data } = await db
             .from('shipments')
-            .update({ status })
+            .update({ status, risk: riskValue, ai_action })
             .eq('id', id)
             .eq('"userID"', userID)
             .select();
@@ -109,7 +132,7 @@ export async function getShipment(req, res) {
         return res.status(401).json({ Error: "Please login first!" });
 
     try {
-        const { data: results } = await db
+        const { data: results } = await db 
             .from('shipments')
             .select('*')
             .eq('"userID"', userID);
@@ -124,7 +147,9 @@ export async function getShipment(req, res) {
                 quantity: result.quantity,
                 source: result.source,
                 destination: result.destination,
-                status: result.status
+                status: result.status,
+                risk: result.risk,
+                ai_action: result.ai_action 
             };
         });
 
@@ -149,7 +174,9 @@ export async function allShipments(req, res) {
                 quantity: result.quantity,
                 source: result.source,
                 destination: result.destination,
-                status: result.status
+                status: result.status,
+                risk: result.risk,
+                ai_action: result.ai_action
             };
         });
 
