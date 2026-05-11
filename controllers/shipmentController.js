@@ -34,6 +34,14 @@ export async function postShipment(req, res) {
         .update({ current_stock: stockData.current_stock - quantity })
         .eq('product_name', product_name);
 
+    const newStock = stockData.current_stock - quantity;
+
+    if (newStock <= thresholdData.min_threshold) {
+    await db.from('inventory')
+        .update({ restocking_needed: true })
+        .eq('product_name', product_name);
+    }
+
     try {
         
         const aiResponse = await axios.post('http://ai-service:8000/analyze', {
@@ -42,8 +50,8 @@ export async function postShipment(req, res) {
             source,
             destination,
             status: status || "Pending",
-            stock: stockData.current_stock,
-            Minimum_threshold: thresholdData.min_threshold
+            // stock: stockData.current_stock,
+            // Minimum_threshold: thresholdData.min_threshold
         });
 
         const riskValue = aiResponse.data.risk_level;
@@ -103,8 +111,8 @@ export async function updateShipment(req, res) {
             source: data_returned.source,
             destination: data_returned.destination,
             status,
-            stock: stock.current_stock,
-            Minimum_threshold: minimum_threshold.min_threshold
+            // stock: stock.current_stock,
+            // Minimum_threshold: minimum_threshold.min_threshold
         });
 
         const riskValue = aiResponse.data.risk_level;
@@ -215,6 +223,10 @@ export async function updateInventory(req, res) {
     if (userID != req.session.userId)
         return res.status(401).json({ Error: "Please login first!" });
 
+    const { data: user } = await db.from('users').select('role').eq('"userID"', userID).single();
+    if (!user || user.role !== 'warehouse')
+        return res.status(403).json({ Error: "Only warehouse accounts can update inventory" });
+
     let { product_name, quantity, min_threshold } = req.body;
     if (!product_name || !quantity || !min_threshold)
         return res.status(400).json({ error: "Please enter all the details to update inventory" });
@@ -225,7 +237,7 @@ export async function updateInventory(req, res) {
             .select('*')
             .eq('product_name', product_name);  
         if (!data || data.length === 0){
-            await db.from('inventory').insert({ product_name, current_stock: quantity, min_threshold });
+            await db.from('inventory').insert({ product_name, current_stock: quantity, min_threshold, "warehouseID": userID, restocking_needed: false });
             return res.status(201).json({ Success: `Inventory added for product ${product_name}!` });
         }
         await db.from('inventory')

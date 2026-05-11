@@ -38,8 +38,6 @@ class Shipment(BaseModel):
     source: str
     destination: str
     status: str
-    stock: int
-    Minimum_threshold: int
 
 @app.post("/analyze")
 async def analyze_shipment(shipment: Shipment):
@@ -49,14 +47,11 @@ async def analyze_shipment(shipment: Shipment):
     - Quantity: {shipment.quantity}
     - Status: {shipment.status}
     - Route: {shipment.source} to {shipment.destination}
-    - Current Stock: {shipment.stock}
-    - Minimum Threshold: {shipment.Minimum_threshold}
     INSTRUCTIONS:
     1. Determine risk_level (Low, Medium, High).
     2. Provide reasoning.
     3. If risk is HIGH or MEDIUM, provide an 'ai_action' (a professional email draft to the destination manager).
     4. If risk is LOW, 'ai_action' should be "No action required."
-    5. If stock hits threshold, recommend restocking actions in 'ai_action'.
     Respond ONLY in valid JSON format with these exact keys:
     "risk_level", "reasoning", "ai_action"
 
