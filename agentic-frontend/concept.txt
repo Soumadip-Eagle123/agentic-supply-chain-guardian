@@ -1,0 +1,1 @@
+home page -> (home link, post shipment with id(param), getallshipment, updateshipment(param), deleteshipment(param), update inventory(param))
