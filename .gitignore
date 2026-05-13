@@ -1,9 +1,10 @@
 node_modules/
-package-lock.json/
 .env
-
-# Python virtual environments
-ai-service/venv/
-ai-service/.venv/
+.env.local
+.env.*
 __pycache__/
 *.pyc
+.vscode/
+.next/
+agentic-frontend/.next/
+agentic-frontend/node_modules/

@@ -10,4 +10,4 @@ COPY . .
 
 EXPOSE 8000
 
-CMD sh -c "npm run swagger && npm run dev"
+CMD ["npm", "run", "dev"]

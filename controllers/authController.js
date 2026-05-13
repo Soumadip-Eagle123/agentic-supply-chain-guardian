@@ -2,8 +2,13 @@ import bcrypt from 'bcryptjs'
 import db from '../db/db.js'
 
 export async function signup(req, res) {
-    let { username, password, role } = req.body;
+    let { username, password, role, location_coords } = req.body;
     role = role || 'user';
+
+    if (!location_coords || !Array.isArray(location_coords)) {
+        return res.status(400).json({ error: "Please select your location on the map." });
+    }
+    
     if (!['user', 'warehouse'].includes(role))
         return res.status(400).json({ error: "Role must be 'user' or 'warehouse'" });
     if (!username || !password)
@@ -29,7 +34,8 @@ export async function signup(req, res) {
             username,
             password: hashed,
             loggedIn: 0,
-            role
+            role,
+            location_coords: location_coords
         });
 
         return res.status(201).json({ Success: "User registered!" });
@@ -63,7 +69,18 @@ export async function loginUser(req, res) {
 
         await db.from('users').update({ loggedIn: 1 }).eq('"userID"', result.userID);
 
-        res.status(200).json({ Success: "User Login successful!" });
+
+        req.session.save((err) => {
+    if (err) {
+        console.error("Session Save Error:", err);
+        return res.status(500).json({ error: "Session synchronization failed" });
+    }
+    res.status(200).json({ 
+        Success: "Login successful!", 
+        userID: result.userID,
+        location_coords: result.location_coords
+    });
+});
     } catch (err) {
         console.error('Login error:', err.message);
         res.status(500).json({ error: 'Login failed. Please try again.' });
@@ -94,10 +111,34 @@ export async function loginWarehouse(req, res) {
 
         await db.from('users').update({ loggedIn: 1 }).eq('"userID"', result.userID);
 
-        res.status(200).json({ Success: "User Login successful!" });
+        req.session.save((err) => {
+    if (err) {
+        console.error("Session Save Error:", err);
+        return res.status(500).json({ error: "Session synchronization failed" });
+    }
+    res.status(200).json({ 
+        Success: "Login successful!", 
+        userID: result.userID,
+        location_coords: result.location_coords
+    });
+});
     } catch (err) {
         console.error('Login error:', err.message);
         res.status(500).json({ error: 'Login failed. Please try again.' });
+    }
+}
+
+export async function getWarehouses(req, res) {
+    try {
+        const { data, error } = await db
+            .from('users')
+            .select('"userID", username')
+            .eq('role', 'warehouse');
+
+        if (error) throw error;
+        res.status(200).json(data);
+    } catch (err) {
+        res.status(500).json({ error: "Could not fetch warehouses." });
     }
 }
 

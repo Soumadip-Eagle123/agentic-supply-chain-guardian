@@ -1,250 +1,342 @@
-import db from '../db/db.js'
-import axios from 'axios'
+import db from '../db/db.js';
+import axios from 'axios';
 
-async function getUsername(userID) {
-    const { data } = await db
+async function getUserData(userID) {
+    const { data, error } = await db
         .from('users')
-        .select('username')
-        .eq('"userID"', userID)
+        .select('username, location_coords, role')
+        .eq("userID", userID)
         .single();
-    return data?.username;
+    if (error || !data) return null;
+    return data;
+}
+
+async function executeW2WTransfer(plan) {
+    const { source_id, dest_id, qty, product_name } = plan;
+
+    try {
+        const sourceWH = await getUserData(source_id);
+        const destWH = await getUserData(dest_id);
+
+        if (!sourceWH || !destWH) throw new Error("Agent source/dest nodes unreachable.");
+
+        const { data: sourceInv } = await db.from('inventory').select('current_stock').eq('warehouseID', source_id).eq('product_name', product_name).single();
+        const { data: destInv } = await db.from('inventory').select('current_stock').eq('warehouseID', dest_id).eq('product_name', product_name).single();
+
+        await db.from('inventory')
+            .update({ current_stock: sourceInv.current_stock - qty })
+            .eq('warehouseID', source_id)
+            .eq('product_name', product_name);
+
+        await db.from('inventory')
+            .update({ 
+                current_stock: destInv.current_stock + qty,
+                restocking_needed: false 
+            })
+            .eq('warehouseID', dest_id)
+            .eq('product_name', product_name);
+
+        await db.from('shipments').insert({
+            sourceID: source_id,
+            "userID": dest_id,
+            product_name,
+            quantity: qty,
+            source: sourceWH.username,
+            destination: destWH.username,
+            source_coords: sourceWH.location_coords,
+            dest_coords: destWH.location_coords,
+            shipment_type: 'W2W',
+            status: 'AI Rebalancing',
+            risk: 'Low',
+            ai_action: `Autonomous Rebalance: Llama 3 moving ${qty} units from ${sourceWH.username} to Hub ${destWH.username}.`,
+            displayToSource: true,
+            displayToDest: true
+        });
+
+        console.log(`[AGENT SUCCESS] Neural Grid Stabilized. ${qty} units of ${product_name} in transit.`);
+    } catch (err) {
+        console.error("[AGENT FAILURE] Executor Error:", err.message);
+    }
 }
 
 export async function postShipment(req, res) {
     const userID = Number(req.params.userID);
-    if (userID != req.session.userId)
-        return res.status(401).json({ Error: "Please login first!" });
-
-    let { product_name, quantity, source, destination, status } = req.body;
-    status = status || "Pending";
-    
-    if (!product_name || !quantity || !source || !destination)
-        return res.status(400).json({ error: "Please enter all details" });
-
-    const { data: stockData } = await db.from('inventory').select('current_stock').eq('product_name', product_name).single();
-    const { data: thresholdData } = await db.from('inventory').select('min_threshold').eq('product_name', product_name).single();
-    if (!stockData || stockData.current_stock === undefined)
-        return res.status(400).json({ error: "Product not found in inventory" });
-    if (!thresholdData || thresholdData.min_threshold === undefined)
-        return res.status(400).json({ error: "Inventory threshold not found for product" });
-    if (quantity > stockData.current_stock)
-        return res.status(400).json({ error: "Insufficient stock available" });
-
-    await db.from('inventory')
-        .update({ current_stock: stockData.current_stock - quantity })
-        .eq('product_name', product_name);
-
-    const newStock = stockData.current_stock - quantity;
-
-    if (newStock <= thresholdData.min_threshold) {
-    await db.from('inventory')
-        .update({ restocking_needed: true })
-        .eq('product_name', product_name);
+    if (!req.session.userId || userID !== Number(req.session.userId)) {
+        return res.status(401).json({ Error: "Unauthorized" });
     }
 
+    let { product_name, quantity, warehouseID, status } = req.body;
+    status = status || "In Transit";
+
     try {
-        
+        const bizUser = await getUserData(userID);
+        const whUser = await getUserData(warehouseID);
+        if (!bizUser || !whUser) return res.status(404).json({ error: "Party not found." });
+
+        const { data: inv } = await db.from('inventory')
+            .select('*').eq('product_name', product_name).eq('warehouseID', warehouseID).single();
+
+        if (!inv || inv.current_stock < quantity) return res.status(400).json({ error: "Stock unavailable." });
+
         const aiResponse = await axios.post('http://ai-service:8000/analyze', {
-            product_name,
-            quantity,
-            source,
-            destination,
-            status: status || "Pending",
-            // stock: stockData.current_stock,
-            // Minimum_threshold: thresholdData.min_threshold
+            product_name, quantity, source: whUser.username, destination: bizUser.username,
+            source_coords: whUser.location_coords, dest_coords: bizUser.location_coords, status
+        }).catch(() => ({ data: { risk_level: "Low", ai_action: "No Action", reasoning: "AI Offline" }}));
+
+        const newStock = inv.current_stock - quantity;
+        await db.from('inventory').update({ 
+            current_stock: newStock, 
+            restocking_needed: newStock <= inv.min_threshold 
+        }).eq('id', inv.id);
+
+        await db.from('shipments').insert({
+            "userID": userID, sourceID: warehouseID,
+            product_name, quantity, source: whUser.username, destination: bizUser.username,
+            source_coords: whUser.location_coords, dest_coords: bizUser.location_coords,
+            status, risk: aiResponse.data.risk_level, ai_action: aiResponse.data.ai_action,
+            displayToSource: true, displayToDest: true
         });
 
-        const riskValue = aiResponse.data.risk_level;
-        const ai_action = aiResponse.data.ai_action;
+        if (newStock <= inv.min_threshold) {
+            console.log(`[REBALANCE] Hub ${warehouseID} critical. Assembling recovery context...`);
 
-        await db.from('shipments').insert({ 
-            userID, 
-            product_name, 
-            quantity, 
-            source, 
-            destination, 
-            status,
-            risk: riskValue,
-            ai_action
-        });
+            try {
+                const { data: invItems, error: invError } = await db
+                    .from('inventory')
+                    .select('warehouseID, current_stock, min_threshold')
+                    .eq('product_name', product_name)
+                    .not('warehouseID', 'is', null);
 
-        res.status(201).json({ 
-            Success: `Shipment added with ${riskValue} risk level!`,
-            Change_in_inventory: `Stock reduced from ${stockData.current_stock} to ${stockData.current_stock - quantity} for product ${product_name}`,
-            analysis: aiResponse.data.reasoning,
-            AI_Action: `Recommended action: ${ai_action}`
-        });
+                if (invError) throw invError;
+
+                const warehouseIDs = invItems.map(i => i.warehouseID);
+                
+                const { data: userDetails, error: userError } = await db
+                    .from('users')
+                    .select('userID, username, location_coords')
+                    .in('userID', warehouseIDs)
+                    .not('location_coords', 'is', null); 
+
+                if (userError) throw userError;
+
+                const cleanContext = invItems
+                    .map(item => {
+                        const detail = userDetails.find(u => u.userID === item.warehouseID);
+                        if (!detail) return null; 
+                        return {
+                            warehouse_id: item.warehouseID,
+                            stock: item.current_stock,
+                            threshold: item.min_threshold,
+                            name: detail.username,
+                            coords: detail.location_coords
+                        };
+                    })
+                    .filter(Boolean); 
+
+                if (cleanContext.length > 0) {
+                    console.log("[AI-LINK] Sending sanitized context to Llama 3...");
+
+                    const agentRes = await axios.post('http://ai-service:8000/rebalance', {
+                        product_name,
+                        deficit_warehouse_id: warehouseID,
+                        inventory_context: cleanContext,
+                        constant_restock_qty: inv.min_threshold * 2
+                    });
+
+                    const decision = agentRes.data;
+                    console.log("[AI-DECISION] Status:", decision.status);
+
+                    if (decision.status === 'EXECUTE' && decision.source_id) {
+                        console.log(`[AGENT] Directive: Move ${decision.qty} from Hub ${decision.source_id}`);
+                        await executeW2WTransfer({
+                            source_id: Number(decision.source_id),
+                            dest_id: warehouseID,
+                            qty: decision.qty,
+                            product_name: product_name
+                        });
+                    }
+                } else {
+                    console.log("[AGENT] No viable surplus hubs with valid coordinates found.");
+                }
+            } catch (err) {
+                console.error("[REBALANCE-CRASH] Trace:", err.message);
+            }
+        }
+
+        res.status(201).json({ Success: "Shipment Dispatched" });
+
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ Error: "AI Service unreachable or DB error" });
+        console.error("CRITICAL_ERR:", err);
+        res.status(500).json({ Error: "Dispatch failed" });
     }
 }
 
-export async function updateShipment(req, res) {
+export async function clearShipment(req, res) {
     const userID = Number(req.params.userID);
-    if (userID != req.session.userId)
-        return res.status(401).json({ Error: "Please login first!" });
+    if (userID !== req.session.userId)
+        return res.status(401).json({ Error: "Unauthorized" });
 
-    let { id, status } = req.body;
-    if (!id || !status)
-        return res.status(400).json({ error: "Please enter all the details to update shipment" });
-    
-    
-    try {
-        let { data: data_returned } = await db
-        .from('shipments')
-        .select('product_name', 'quantity', 'source', 'destination')
-        .eq('id', id)
-        .eq('"userID"', userID)
-        .single();
-            if (!data_returned || !data_returned.product_name)
-                return res.status(400).json({ Error: "No such shipment id exists!" });
-
-        const { data: stock } = await db.from('inventory').select('current_stock').eq('product_name', data_returned.product_name).single();
-        const { data: minimum_threshold } = await db.from('inventory').select('min_threshold').eq('product_name', data_returned.product_name).single();
-        if (!stock || stock.current_stock === undefined || !minimum_threshold || minimum_threshold.min_threshold === undefined)
-            return res.status(400).json({ Error: "Inventory data not found for the product!" });
-
-        const aiResponse = await axios.post('http://ai-service:8000/analyze', {
-            product_name: data_returned.product_name,
-            quantity: data_returned.quantity,
-            source: data_returned.source,
-            destination: data_returned.destination,
-            status,
-            // stock: stock.current_stock,
-            // Minimum_threshold: minimum_threshold.min_threshold
-        });
-
-        const riskValue = aiResponse.data.risk_level;
-        const ai_action = aiResponse.data.ai_action;
-        const { data } = await db
-            .from('shipments')
-            .update({ status, risk: riskValue, ai_action })
-            .eq('id', id)
-            .eq('"userID"', userID)
-            .select();
-
-        if (!data || data.length === 0)
-            return res.status(400).json({ Error: "No such shipment id exists!" });
-
-        res.status(201).json({ Success: `Shipment details updated for User ${await getUsername(userID)}!` });
-    } catch (err) {
-        res.status(500).json({ Error: "Couldn't update shipment for the user" });
-    }
-}
-
-export async function deleteShipment(req, res) {
-    const userID = Number(req.params.userID);
-    if (userID != req.session.userId)
-        return res.status(401).json({ Error: "Please login first!" });
-
-    let id = req.params.id;
-    if (!id) return res.status(400).json({ error: "Please enter a shipment ID to delete!" });
+    const { id } = req.params;
 
     try {
-        const { data } = await db
+        const { data: shipment, error: fetchError } = await db
             .from('shipments')
-            .delete()
+            .select('*')
             .eq('id', id)
-            .eq('"userID"', userID)
-            .select();
+            .single();
 
-        if (!data || data.length === 0)
-            return res.status(400).json({ Error: "No such shipment id exists, deletion unsuccessful!!" });
+        if (fetchError || !shipment) return res.status(404).json({ Error: "Shipment record not found." });
 
-        res.status(201).json({ Success: `Shipment details deleted for User ${await getUsername(userID)}!` });
+        let updateData = {};
+        if (shipment.sourceID === userID) updateData = { displayToSource: false };
+        else if (shipment.userID === userID) updateData = { displayToDest: false };
+        else return res.status(403).json({ Error: "You do not have permission to clear this shipment." });
+
+        const { error: updateError } = await db.from('shipments').update(updateData).eq('id', id);
+        if (updateError) throw updateError;
+
+        res.status(200).json({ Success: "Shipment cleared from your view." });
     } catch (err) {
-        res.status(500).json({ Error: "Couldn't delete shipment for the user" });
+        res.status(500).json({ Error: "Failed to clear shipment." });
     }
 }
 
 export async function getShipment(req, res) {
     const userID = Number(req.params.userID);
-    if (userID != req.session.userId)
-        return res.status(401).json({ Error: "Please login first!" });
+    if (userID !== req.session.userId)
+        return res.status(401).json({ Error: "Unauthorized access" });
 
     try {
-        const { data: results } = await db 
+        const { data: results, error } = await db
             .from('shipments')
             .select('*')
-            .eq('"userID"', userID);
+            .or(`and(sourceID.eq.${userID},displayToSource.eq.true),and(userID.eq.${userID},displayToDest.eq.true)`);
 
-        if (!results || results.length === 0)
-            return res.status(400).json({ Error: "No shipment initiated till now!" });
+        if (error) throw error;
+        if (!results || results.length === 0) return res.status(200).json({});
 
-        let resultsJSON = {};
-        results.forEach(result => {
-            resultsJSON[result.id] = {
-                product_name: result.product_name,
-                quantity: result.quantity,
-                source: result.source,
-                destination: result.destination,
-                status: result.status,
-                risk: result.risk,
-                ai_action: result.ai_action 
-            };
-        });
+        const resultsJSON = results.reduce((acc, item) => {
+            acc[item.id] = item;
+            return acc;
+        }, {});
 
         res.status(200).json(resultsJSON);
     } catch (err) {
-        res.status(500).json({ Error: "Couldn't get the shipments for the user!" });
+        res.status(500).json({ Error: "Could not retrieve shipment feed." });
+    }
+}
+
+
+export async function getInventory(req, res) {
+    const warehouseID = Number(req.params.warehouseID);
+    if (warehouseID !== req.session.userId)
+        return res.status(401).json({ Error: "Unauthorized" });
+
+    try {
+        const { data, error } = await db
+            .from('inventory')
+            .select('*')
+            .eq('warehouseID', warehouseID);
+
+        if (error) throw error;
+        res.status(200).json(data);
+    } catch (err) {
+        res.status(500).json({ Error: "Failed to fetch stock." });
+    }
+}
+
+
+export async function updateInventory(req, res) {
+    const userID = Number(req.params.userID);
+    if (userID !== req.session.userId) 
+        return res.status(401).json({ Error: "Unauthorized" });
+
+    let { product_name, quantity, min_threshold, category } = req.body; 
+    
+    if (!product_name || quantity === undefined)
+        return res.status(400).json({ error: "Product name and quantity are required." });
+
+    try {
+        const { data: existing } = await db
+            .from('inventory')
+            .select('*')
+            .eq('product_name', product_name)
+            .eq('"warehouseID"', userID)
+            .single();
+
+        if (!existing) {
+            await db.from('inventory').insert({
+                product_name,
+                category: category || 'General',
+                current_stock: Number(quantity),
+                min_threshold: Number(min_threshold) || 10,
+                warehouseID: userID,
+                restocking_needed: Number(quantity) <= (Number(min_threshold) || 10)
+            });
+            return res.status(201).json({ Success: `New product ${product_name} registered in ${category}.` });
+        }
+
+        const totalStock = existing.current_stock + Number(quantity);
+        const newThreshold = Number(min_threshold) || existing.min_threshold;
+        const newCategory = category || existing.category;
+
+        await db.from('inventory')
+            .update({
+                current_stock: totalStock,
+                min_threshold: newThreshold,
+                category: newCategory,
+                restocking_needed: totalStock <= newThreshold
+            })
+            .eq('id', existing.id);
+
+        res.status(200).json({ Success: `Batch added to ${product_name}. New total: ${totalStock}` });
+    } catch (err) {
+        res.status(500).json({ Error: "Database error during inventory augmentation." });
+    }
+}
+
+export async function deleteShipment(req, res) {
+    res.status(405).json({ Error: "Use clearShipment (Soft Delete) endpoint instead." });
+}
+
+export async function updateShipment(req, res) {
+    const userID = Number(req.params.userID);
+    if (userID !== req.session.userId)
+        return res.status(401).json({ Error: "Unauthorized" });
+
+    const { id, status } = req.body;
+    if (!id || !status)
+        return res.status(400).json({ error: "Shipment ID and status required." });
+
+    try {
+        const { error } = await db
+            .from('shipments')
+            .update({ status })
+            .eq('id', id);
+
+        if (error) throw error;
+        res.status(200).json({ Success: "Status updated." });
+    } catch (err) {
+        res.status(500).json({ Error: "Failed to update shipment status." });
     }
 }
 
 export async function allShipments(req, res) {
     try {
-        const { data: results } = await db.from('shipments').select('*');
+        const { data, error } = await db
+            .from('shipments')
+            .select('*');
 
-        if (!results || results.length === 0)
-            return res.status(401).json({ Error: "Database is empty! Useless website XD" });
+        if (error) throw error;
+        if (!data || data.length === 0) return res.status(200).json({});
 
-        let resultsJSON = {};
-        results.forEach(result => {
-            resultsJSON[result.id] = {
-                userID: result.userID,
-                product_name: result.product_name,
-                quantity: result.quantity,
-                source: result.source,
-                destination: result.destination,
-                status: result.status,
-                risk: result.risk,
-                ai_action: result.ai_action
-            };
-        });
+        const resultsJSON = data.reduce((acc, item) => {
+            acc[item.id] = item;
+            return acc;
+        }, {});
 
         res.status(200).json(resultsJSON);
     } catch (err) {
-        res.status(500).json({ Error: "Couldn't get the shipments!" });
-    }
-}
-
-export async function updateInventory(req, res) {
-    const userID = Number(req.params.userID);
-    if (userID != req.session.userId)
-        return res.status(401).json({ Error: "Please login first!" });
-
-    const { data: user } = await db.from('users').select('role').eq('"userID"', userID).single();
-    if (!user || user.role !== 'warehouse')
-        return res.status(403).json({ Error: "Only warehouse accounts can update inventory" });
-
-    let { product_name, quantity, min_threshold } = req.body;
-    if (!product_name || !quantity || !min_threshold)
-        return res.status(400).json({ error: "Please enter all the details to update inventory" });
-    
-    try {
-        const { data } = await db
-            .from('inventory')
-            .select('*')
-            .eq('product_name', product_name);  
-        if (!data || data.length === 0){
-            await db.from('inventory').insert({ product_name, current_stock: quantity, min_threshold, "warehouseID": userID, restocking_needed: false });
-            return res.status(201).json({ Success: `Inventory added for product ${product_name}!` });
-        }
-        await db.from('inventory')
-            .update({ current_stock: quantity, min_threshold })
-            .eq('product_name', product_name);
-        res.status(201).json({ Success: `Inventory updated for product ${product_name}!` });
-    } catch (err) {
-        res.status(500).json({ Error: "Couldn't update inventory for the product" });
+        res.status(500).json({ Error: "Could not retrieve all shipments." });
     }
 }

@@ -12,7 +12,7 @@ services:
       - .env
     depends_on:
       - ai-service
-  
+
   ai-service:
     build: ./ai-service
     ports:
@@ -20,4 +20,16 @@ services:
     volumes:
       - ./ai-service:/app
     extra_hosts:
-      - "host.docker.internal:host-gateway" # This maps the name to your host IP
+      - "host.docker.internal:host-gateway"
+
+  frontend:
+    build: ./agentic-frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./agentic-frontend:/app
+      - /app/node_modules
+    env_file:
+      - ./agentic-frontend/.env.local
+    depends_on:
+      - app
