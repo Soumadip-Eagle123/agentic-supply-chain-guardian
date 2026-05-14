@@ -31,20 +31,24 @@ export default function DashboardLayout({
     setRole(userRole || 'user');
   }, []);
 
-
   const handleLogout = async () => {
     const logoutPath = role === 'warehouse' ? 'warehouse' : 'user';
     const API = process.env.NEXT_PUBLIC_API_URL;
-    await fetch(`${API}/api/auth/logout/${logoutPath}`, 
-      {
-        method: 'GET',
-        credentials: 'include',
-      }
-    );
+    try {
+      await fetch(`${API}/api/auth/logout/${logoutPath}`, 
+        {
+          method: 'GET',
+          credentials: 'include',
+        }
+      );
+    } catch (err) {
+      console.error("Logout cleanup failed");
+    }
     Cookies.remove('userID');
     Cookies.remove('role');
     router.push('/login/user');
   };
+
   const navItems = [
     { 
       name: 'Intelligence Feed', 
@@ -79,17 +83,19 @@ export default function DashboardLayout({
   ];
 
   return (
-    <div className="flex h-[calc(100vh-65px)] overflow-hidden">
-      {/* SIDEBAR */}
-      <aside className="w-64 border-r border-slate-800 bg-slate-900/20 backdrop-blur-sm p-4 flex flex-col">
+    <div className="flex h-[calc(100vh-65px)] overflow-hidden bg-transparent">
+      {/* SIDEBAR - Semi-transparent with backdrop blur to show background animation */}
+      <aside className="w-64 border-r border-slate-800 bg-slate-900/40 backdrop-blur-md p-4 flex flex-col z-20">
         <div className="mb-8 px-4">
-          <div className="flex items-center gap-3 py-2 px-3 bg-slate-800/50 rounded-xl border border-slate-700">
+          <div className="flex items-center gap-3 py-2 px-3 bg-slate-800/40 rounded-xl border border-slate-700/50">
             <div className="p-2 bg-blue-600/20 rounded-lg text-blue-400">
               <User size={18} />
             </div>
-            <div>
-              <p className="text-[10px] font-mono text-slate-500 uppercase leading-none mb-1">Authenticated</p>
-              <p className="text-sm font-bold text-white truncate w-32">{role === 'warehouse' ? 'HUB MANAGER' : 'LOGISTICS OP'}</p>
+            <div className="overflow-hidden">
+              <p className="text-[9px] font-mono text-slate-500 uppercase leading-none mb-1 tracking-widest">Operator</p>
+              <p className="text-sm font-bold text-white truncate uppercase tracking-tight">
+                {role === 'warehouse' ? 'Warehouse Manager' : 'Store Manager'}
+              </p>
             </div>
           </div>
         </div>
@@ -101,10 +107,10 @@ export default function DashboardLayout({
               <Link
                 key={item.name}
                 href={item.href}
-                className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 ${
+                className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 border ${
                   isActive
-                    ? 'bg-blue-600/10 text-blue-400 border border-blue-600/20'
-                    : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                    ? 'bg-blue-600/10 text-blue-400 border-blue-600/20 shadow-[0_0_15px_rgba(37,99,235,0.1)]'
+                    : 'text-slate-400 border-transparent hover:bg-slate-800/40 hover:text-slate-200'
                 }`}
               >
                 <item.icon size={18} className={isActive ? 'text-blue-400' : 'text-slate-500'} />
@@ -120,15 +126,16 @@ export default function DashboardLayout({
             className="flex items-center gap-3 w-full px-4 py-3 text-red-400 hover:bg-red-500/10 rounded-xl transition-all group"
           >
             <LogOut size={18} className="group-hover:-translate-x-1 transition-transform" />
-            <span className="font-medium text-sm">Terminate Session</span>
+            <span className="font-medium text-sm uppercase tracking-wider">Terminate Session</span>
           </button>
-          <div className="px-4 py-2">
-            <p className="text-[9px] font-mono text-slate-600 uppercase tracking-widest text-center">Guardian Node: {userID}</p>
+          <div className="px-4 py-1">
+            <p className="text-[8px] font-mono text-slate-600 uppercase tracking-[0.3em] text-center">Node: {userID}</p>
           </div>
         </div>
       </aside>
 
-      <main className="flex-1 overflow-y-auto bg-slate-950 p-8">
+      {/* MAIN CONTENT - Background set to transparent so RootLayout animations show through */}
+      <main className="flex-1 overflow-y-auto p-8 bg-transparent relative z-10">
         <div className="max-w-6xl mx-auto">
           {children}
         </div>
