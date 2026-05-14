@@ -228,19 +228,26 @@ export async function getShipment(req, res) {
 
 
 export async function getInventory(req, res) {
-    const warehouseID = Number(req.params.warehouseID);
-    if (warehouseID !== req.session.userId)
-        return res.status(401).json({ Error: "Unauthorized" });
+    const warehouseID = Number(req.params.userID);
+    
+
+    if (!req.session?.userId || Number(warehouseID) !== Number(req.session.userId)) {
+        return res.status(401).json({ 
+            Error: "Unauthorized",
+            debug: { param: warehouseID, session: req.session?.userId } 
+        });
+    }
 
     try {
         const { data, error } = await db
             .from('inventory')
             .select('*')
-            .eq('warehouseID', warehouseID);
+            .eq('warehouseID', warehouseID); // Usually no double quotes needed here
 
         if (error) throw error;
         res.status(200).json(data);
     } catch (err) {
+        console.error("Database Error:", err);
         res.status(500).json({ Error: "Failed to fetch stock." });
     }
 }
