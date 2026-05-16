@@ -8,3 +8,4 @@ __pycache__/
 .next/
 agentic-frontend/.next/
 agentic-frontend/node_modules/
+**/*/*.lock

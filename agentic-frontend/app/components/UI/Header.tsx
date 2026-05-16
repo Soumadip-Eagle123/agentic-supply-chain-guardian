@@ -36,7 +36,7 @@ export default function Header() {
           </h1>
         </button>
         <div className="text-[10px] font-mono text-orange-600 uppercase tracking-[0.2em]">
-          <Link href="https://github.com/Soumadip-Eagle123" className="hover:text-blue-500 transition-colors">Github Repo</Link>
+          <Link href="https://github.com/Soumadip-Eagle123" className="hover:text-blue-500 transition-colors" target="_blank">Github Repo</Link>
         </div>
       </div>
     </header>

@@ -12,7 +12,7 @@ export default function KnowledgeIndexerTerminal() {
   const [telemetryLogs, setTelemetryLogs] = useState<string>('');
   const [isCompiling, setIsCompiling] = useState(false);
 
-  const BACKEND_AI_URL = "http://localhost:8001";
+  const BACKEND_AI_URL = process.env.NEXT_PUBLIC_AI_SERVICE_URL || "http://localhost:8001";
 
   const executeVectorIngestion = async (e: React.FormEvent) => {
     e.preventDefault();
