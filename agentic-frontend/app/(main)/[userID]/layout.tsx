@@ -9,7 +9,9 @@ import {
   Map as MapIcon, 
   LogOut, 
   Activity,
-  User 
+  User,
+  ScrollText,
+  Layers 
 } from 'lucide-react';
 import Cookies from 'js-cookie';
 
@@ -80,6 +82,19 @@ export default function DashboardLayout({
       icon: Package,
       show: role === 'warehouse' 
     },
+    // INJECTED KNOWLEDGE CORE LINK: Visible to all operators
+    { 
+      name: 'Knowledge Matrix', 
+      href: `/${userID}/knowledge`, 
+      icon: ScrollText,
+      show: true 
+    },
+    { 
+    name: 'Global Warehouse Stock', 
+    href: `/${userID}/global-inventory`, 
+    icon: Layers,
+    show: true // Expose globally to let cross-functional managers query raw allocations
+  }
   ];
 
   return (
@@ -134,7 +149,6 @@ export default function DashboardLayout({
         </div>
       </aside>
 
-      {/* MAIN CONTENT - Background set to transparent so RootLayout animations show through */}
       <main className="flex-1 overflow-y-auto p-8 bg-transparent relative z-10">
         <div className="max-w-6xl mx-auto">
           {children}

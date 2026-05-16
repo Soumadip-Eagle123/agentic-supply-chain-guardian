@@ -11,7 +11,6 @@ interface InventoryItem {
 }
 
 export default function WarehouseMonitor({ params }: { params: Promise<{ userID: string }> }) {
-  // Correctly unwrap params for Next.js 15
   const { userID } = use(params);
   
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
@@ -37,7 +36,6 @@ export default function WarehouseMonitor({ params }: { params: Promise<{ userID:
         if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
         
         const data = await res.json();
-        // Handle both Array and Object responses
         const formattedData = Array.isArray(data) ? data : Object.values(data);
         setInventory(formattedData);
       } catch (err) {
@@ -84,7 +82,6 @@ export default function WarehouseMonitor({ params }: { params: Promise<{ userID:
 
           return (
             <div key={item.id} className="relative group">
-              {/* Item Info Header */}
               <div className="flex justify-between items-end mb-4">
                 <div>
                   <h3 className="text-lg font-bold text-slate-100 uppercase tracking-tight">{item.product_name}</h3>
@@ -100,23 +97,17 @@ export default function WarehouseMonitor({ params }: { params: Promise<{ userID:
                 </div>
               </div>
 
-              {/* The Gauge */}
               <div className="relative h-12 flex items-center">
-                {/* Background Track */}
                 <div className="absolute inset-0 h-4 my-auto w-full bg-slate-900 rounded-sm overflow-hidden border border-slate-800">
-                  {/* Danger Zone Shading (0 to 10%) */}
                   <div 
                     className="absolute h-full bg-red-500/10 border-r border-red-500/30"
                     style={{ width: `${thresholdPercentage}%` }}
                   />
-                  {/* Current Stock Level Fill */}
                   <div 
                     className={`h-full transition-all duration-1000 ease-in-out ${isCritical ? 'bg-red-600' : 'bg-blue-600 shadow-[0_0_15px_rgba(37,99,235,0.3)]'}`}
                     style={{ width: `${stockPercentage}%` }}
                   />
                 </div>
-
-                {/* Threshold Marker (The "Arrow") */}
                 <div 
                   className="absolute top-0 h-full flex flex-col justify-between items-center transition-all duration-500"
                   style={{ left: `${thresholdPercentage}%`, transform: 'translateX(-50%)' }}
@@ -131,7 +122,6 @@ export default function WarehouseMonitor({ params }: { params: Promise<{ userID:
                 </div>
               </div>
 
-              {/* Bottom Scale Markings */}
               <div className="flex justify-between mt-2 px-1">
                 {[0, 25, 50, 75, 100].map((mark) => (
                   <div key={mark} className="flex flex-col items-center">

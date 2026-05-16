@@ -44,7 +44,7 @@ export default function UserLoginPage() {
   return (
     <form onSubmit={handleLogin} className="space-y-4">
       <input
-        type="text" placeholder="User ID" value={username}
+        type="text" placeholder="Username" value={username}
         onChange={(e) => setUsername(e.target.value)}
         className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-white focus:border-blue-500 outline-none"
         required

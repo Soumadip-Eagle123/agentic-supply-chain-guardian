@@ -21,7 +21,7 @@ export default function UpdateInventory({ params }: { params: Promise<{ userID: 
       const res = await fetch(`${API}/api/inventory/${userID}/stock`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include', // Handshake with backend session
+        credentials: 'include', 
         body: JSON.stringify({
           ...formData,
           quantity: Number(formData.quantity),

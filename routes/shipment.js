@@ -1,4 +1,4 @@
-import express from 'express'
+import express from 'express';
 import { 
     postShipment, 
     updateShipment, 
@@ -6,21 +6,21 @@ import {
     getShipment, 
     allShipments, 
     updateInventory,
-    getInventory  
-} from '../controllers/shipmentController.js'
+    getInventory,
+    getGlobalInventoryMatrix  
+} from '../controllers/shipmentController.js';
 
 export const shipmentRouter = express.Router({ mergeParams: true });
 export const allRouter = express.Router();
 export const inventoryRouter = express.Router({ mergeParams: true });
 
-shipmentRouter.post('/:userID/send', postShipment);
-shipmentRouter.put('/:userID/statusChange', updateShipment);
-
-shipmentRouter.delete('/:userID/deleteShipment/:id', clearShipment); 
-
-shipmentRouter.get('/:userID/getShipment', getShipment);
-
-inventoryRouter.post('/:userID/stock', updateInventory);
-inventoryRouter.get('/:userID/stock', getInventory); // For the Warehouse Monitor bars
-
+allRouter.get('/global-matrix', getGlobalInventoryMatrix);
 allRouter.get('/', allShipments);
+
+shipmentRouter.post('/send', postShipment);
+shipmentRouter.put('/statusChange', updateShipment);
+shipmentRouter.delete('/deleteShipment/:id', clearShipment); 
+shipmentRouter.get('/getShipment', getShipment);
+
+inventoryRouter.post('/stock', updateInventory);
+inventoryRouter.get('/stock', getInventory);

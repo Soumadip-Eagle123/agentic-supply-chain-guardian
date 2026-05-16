@@ -30,8 +30,8 @@ app.use(cors({
 }));
 app.use('/api/auth', authRouter);
 app.use('/api/shipment', allRouter);
-app.use('/api/shipment', shipmentRouter);
-app.use('/api/inventory', inventoryRouter);
+app.use('/api/shipment/:userID', shipmentRouter);
+app.use('/api/inventory/:userID', inventoryRouter);
 
 
 app.listen(PORT, () => { 

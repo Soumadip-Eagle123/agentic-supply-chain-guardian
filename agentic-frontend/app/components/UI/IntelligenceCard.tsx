@@ -1,7 +1,7 @@
 'use client';
 import React from 'react';
 import Link from 'next/link';
-import { useParams } from 'next/navigation'; // Add this hook to get the userID
+import { useParams } from 'next/navigation';
 import { ShieldAlert, ShieldCheck, ShieldMinus, X, Mail, Edit2 } from 'lucide-react';
 
 interface ShipmentProps {

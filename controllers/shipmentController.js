@@ -80,8 +80,15 @@ export async function postShipment(req, res) {
 
         const aiResponse = await axios.post('http://ai-service:8000/analyze', {
             product_name, quantity, source: whUser.username, destination: bizUser.username,
-            source_coords: whUser.location_coords, dest_coords: bizUser.location_coords, status
-        }).catch(() => ({ data: { risk_level: "Low", ai_action: "No Action", reasoning: "AI Offline" }}));
+            source_coords: whUser.location_coords, dest_coords: bizUser.location_coords, status, 
+            userID: String(userID),
+
+            metadata_env: {
+              route_id: "ROUTE-NORTH-04",
+              road_condition: "Severe Unpaved Potholes",
+              current_weather: "Heavy Monsoon Rain"
+            }
+        }).catch(() => ({ data: { risk_level: "Low", ai_action: "No Action", reasoning: "AI Service Connection timeout." }}));
 
         const newStock = inv.current_stock - quantity;
         await db.from('inventory').update({ 
@@ -345,5 +352,39 @@ export async function allShipments(req, res) {
         res.status(200).json(resultsJSON);
     } catch (err) {
         res.status(500).json({ Error: "Could not retrieve all shipments." });
+    }
+}
+
+export async function getGlobalInventoryMatrix(req, res) {
+    try {
+        const { data: warehouses, error: whError } = await db
+            .from('users')
+            .select('userID, username')
+            .eq('role', 'warehouse');
+
+        if (whError || !warehouses) {
+            return res.status(500).json({ Error: "Could not sync active warehouse node maps." });
+        }
+        const { data: stockItems, error: invError } = await db
+            .from('inventory')
+            .select('*');
+
+        if (invError) return res.status(500).json({ Error: "Failed to harvest core ledger parameters." });
+
+        const cleanMatrix = stockItems.map(item => {
+            const matchingWH = warehouses.find(w => Number(w.userID) === Number(item.warehouseID));
+            return {
+                ...item,
+                warehouse_name: matchingWH ? matchingWH.username : `Node Cluster #${item.warehouseID}`
+            };
+        });
+        res.status(200).json({
+            warehouses: warehouses, // Sends the complete list to build your dynamic dropdown menu
+            inventory: cleanMatrix
+        });
+
+    } catch (err) {
+        console.error("Global matrix extraction failure:", err);
+        res.status(500).json({ Error: "Internal server telemetry link decoupled." });
     }
 }

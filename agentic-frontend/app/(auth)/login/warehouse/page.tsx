@@ -46,7 +46,7 @@ export default function WarehouseLoginPage() {
   return (
     <form onSubmit={handleLogin} className="space-y-4">
       <input
-        type="text" placeholder="Warehouse Admin ID" value={username}
+        type="text" placeholder="Username" value={username}
         onChange={(e) => setUsername(e.target.value)}
         className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-white focus:border-green-500 outline-none"
         required

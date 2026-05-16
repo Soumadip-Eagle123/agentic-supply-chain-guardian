@@ -20,7 +20,6 @@ export default function UpdateShipment({ params }: { params: Promise<{ userID: s
     setMessage('');
 
     try {
-      // CRITICAL FIX: Ensure 'credentials: include' is used for session handshake [cite: 6838, 10459]
       const res = await fetch(`${API}/api/shipment/${userID}/statusChange`, {
         method: 'PUT',
         credentials: 'include',
@@ -34,7 +33,6 @@ export default function UpdateShipment({ params }: { params: Promise<{ userID: s
       const data = await res.json();
 
       if (res.ok) {
-        // Changing status triggers Llama 3 re-analysis of route risk [cite: 5316, 11036, 11318]
         setMessage('Status updated. AI Agent is re-evaluating route risk...');
         setTimeout(() => {
           router.push(`/${userID}/shipment/manage`);

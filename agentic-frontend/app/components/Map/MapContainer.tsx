@@ -8,7 +8,7 @@ import RoutePath from './RoutePath';
 const whIcon = L.icon({ 
   iconUrl: 'https://cdn-icons-png.flaticon.com/512/2271/2271068.png', 
   iconSize: [30, 30],
-  iconAnchor: [15, 15] // Centers the icon on the coordinate
+  iconAnchor: [15, 15] 
 });
 const bizIcon = L.icon({ 
   iconUrl: 'https://cdn-icons-png.flaticon.com/512/5973/5973800.png', 

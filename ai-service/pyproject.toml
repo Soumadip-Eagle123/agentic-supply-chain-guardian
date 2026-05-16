@@ -1,0 +1,25 @@
+[project]
+name = "ai-service"
+version = "0.1.0"
+description = "FastAPI AI Agent and RAG Core Engine for Agentic Supply Chain Guardian"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "fastapi==0.111.0",
+    "uvicorn==0.30.1",
+    "pydantic==2.7.4",
+    "requests==2.32.3",
+    "ollama==0.2.1",
+    "chromadb==0.5.0",
+    "sentence-transformers==3.0.1",
+    "numpy==1.26.4",
+    "langchain-core==0.2.10",
+    "langchain-community==0.2.6",
+    "langchain-text-splitters==0.2.2",
+    "pymupdf==1.24.5",
+    "python-multipart==0.0.9",
+]
+
+[tool.uv]
+managed = true
+dev-dependencies = []

@@ -6,7 +6,6 @@ export default function NeuralMesh() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pathname = usePathname();
   
-  // Only show this specific animation if the user is inside a dashboard route
   const isDashboard = pathname.includes('/shipment') || pathname.includes('/warehouse');
 
   useEffect(() => {
