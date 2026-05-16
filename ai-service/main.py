@@ -2,14 +2,20 @@ import os
 import json
 import uuid
 import shutil
-import ollama
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from typing import List, Dict, Any, Optional
 
+# Import the official Groq client and dotenv to manage your production keys
+from groq import Groq
+from dotenv import load_dotenv
+
 from rag_engine import rag_engine
+
+# Load values from .env file
+load_dotenv()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -83,7 +89,8 @@ def fix_json_strings(s):
             result.append(char)
     return ''.join(result)
 
-client = ollama.Client(host='http://host.docker.internal:11434')
+# Initialize the Groq Client (It will find your GROQ_API_KEY from the environment automatically)
+client = Groq()
 
 @app.post("/upload-kb")
 async def upload_custom_user_intelligence(
@@ -160,8 +167,13 @@ async def analyze_shipment(shipment: Shipment):
         The 'ai_action' value must be a single-line string. Use \\n for line breaks.
         """
 
-        response = client.chat(model='llama3', messages=[{'role': 'user', 'content': prompt}])
-        content = response['message']['content']
+        # Swapped client.chat for Groq cloud chat completions using Llama 3.3
+        response = client.chat.completions.create(
+            model='llama-3.3-70b-versatile',
+            messages=[{'role': 'user', 'content': prompt}],
+            temperature=0.2
+        )
+        content = response.choices[0].message.content
         
         start = content.find('{')
         end = content.rfind('}') + 1
@@ -204,8 +216,13 @@ async def analyze_rebalance(data: RebalanceRequest):
     """
 
     try:
-        response = client.chat(model='llama3', messages=[{'role': 'user', 'content': prompt}])
-        content = response['message']['content']
+        # Swapped client.chat for Groq cloud chat completions using Llama 3.3
+        response = client.chat.completions.create(
+            model='llama-3.3-70b-versatile',
+            messages=[{'role': 'user', 'content': prompt}],
+            temperature=0.1
+        )
+        content = response.choices[0].message.content
 
         start = content.find('{')
         end = content.rfind('}') + 1

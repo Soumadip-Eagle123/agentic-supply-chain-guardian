@@ -1,4 +1,4 @@
-# ai-service/rag_engine.py
+
 import os
 import uuid
 import numpy as np
@@ -13,14 +13,11 @@ class IngestionBrain:
         self.db_path = "/app/data/vector_store"
         self.model_name = "all-MiniLM-L6-v2"
         
-        # Load embedding weights
         self.encoder = SentenceTransformer(self.model_name)
         
-        # Initialize Persistent Chroma Client
         os.makedirs(self.db_path, exist_ok=True)
         self.chroma_client = chromadb.PersistentClient(path=self.db_path)
         
-        # Seed system-wide default vector layout 
         self.default_collection = self.chroma_client.get_or_create_collection(
             name="supply_chain_defaults",
             metadata={"description": "Global baseline logistics rules and safety manuals."}
@@ -35,7 +32,6 @@ class IngestionBrain:
             if not raw_docs:
                 return 0
                 
-            # Structural text partition configuration
             text_splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=120)
             split_chunks = text_splitter.split_documents(raw_docs)
             
@@ -60,7 +56,6 @@ class IngestionBrain:
         query_vector = self.encoder.encode([search_query]).tolist()
         context_fragments = []
         
-        # 1. Look for user-specific collection overlays
         if user_id and user_id != "undefined":
             user_collection_name = f"user_kb_collection_{user_id}"
             try:
@@ -71,9 +66,7 @@ class IngestionBrain:
                         for doc in user_results['documents'][0]:
                             context_fragments.append(f"[Custom Override Guideline]: {doc}")
             except Exception:
-                pass # Silently proceed if collection doesn't exist yet
-
-        # 2. Fall back to default handbook if user collection did not supply context
+                pass 
         if not context_fragments:
             try:
                 default_results = self.default_collection.query(query_embeddings=query_vector, n_results=top_k)
@@ -84,6 +77,4 @@ class IngestionBrain:
                 pass
 
         return "\n---\n".join(context_fragments)
-
-# Global unified instance handle
 rag_engine = IngestionBrain()
