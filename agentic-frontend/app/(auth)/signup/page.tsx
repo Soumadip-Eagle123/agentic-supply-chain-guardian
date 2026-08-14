@@ -5,9 +5,13 @@ import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import { UserPlus, Loader2, AlertCircle } from 'lucide-react';
 
-const LocationPicker = dynamic(() => import('@/app/components/Map/LocationPicker'), { 
+const LocationPicker = dynamic(() => import('@/app/components/Map/LocationPicker'), {
   ssr: false,
-  loading: () => <div className="h-64 w-full bg-slate-900 animate-pulse rounded-lg flex items-center justify-center text-slate-500 font-mono text-xs">INITIALIZING MAP SATELLITE...</div>
+  loading: () => (
+    <div className="h-64 w-full bg-slate-900 animate-pulse rounded-lg flex items-center justify-center text-slate-500 font-mono text-xs">
+      INITIALIZING MAP SATELLITE...
+    </div>
+  )
 });
 
 export default function SignupPage() {
@@ -16,10 +20,10 @@ export default function SignupPage() {
   const [role, setRole] = useState('user');
   const [coords, setCoords] = useState<[number, number] | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [errorMessage, setErrorMessage] = useState(''); // New: Track API errors
+  const [errorMessage, setErrorMessage] = useState('');
   const router = useRouter();
 
-  const API = process.env.NEXT_PUBLIC_API_URL;
+  const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -27,29 +31,27 @@ export default function SignupPage() {
     setIsLoading(true);
     setErrorMessage('');
 
-    const endpoint = role === 'warehouse' ? 'warehouse' : 'user';
-
     try {
-      const response = await fetch(`${API}/api/auth/signup/${endpoint}`, {
+      const response = await fetch(`${API}/api/auth/signup/${role}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-            username, 
-            password, 
-            role, 
-            location_coords: coords 
+        body: JSON.stringify({
+          username,
+          password,
+          role,
+          location_coords: coords
         }),
       });
 
       const data = await response.json();
 
       if (response.ok) {
-        router.push(`/login/${endpoint}`);
+        router.push(`/login/${role}`);
       } else {
         setErrorMessage(data.error || "Registry authorization failed.");
       }
     } catch (err) {
-      console.error("Connection failed");
+      console.error("Connection failed:", err);
       setErrorMessage("Command Center Unreachable. Check CORS/Backend status.");
     } finally {
       setIsLoading(false);
@@ -65,41 +67,42 @@ export default function SignupPage() {
       )}
 
       <div className="space-y-4">
-        <input 
+        <input
           className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-white focus:border-blue-500 outline-none transition-all"
-          placeholder="Username" 
-          value={username} 
-          onChange={(e) => setUsername(e.target.value)} 
-          required 
+          placeholder="Username"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          required
         />
-        <select 
+        <select
           className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-white focus:border-blue-500 outline-none cursor-pointer"
-          value={role} 
+          value={role}
           onChange={(e) => setRole(e.target.value)}
         >
-          <option value="user">Business User</option>
+          <option value="user">Business User (Store/Plant)</option>
           <option value="warehouse">Warehouse Manager</option>
+          <option value="transporter">Transporter / Delivery Fleet</option>
         </select>
-        <input 
-          type="password" 
+        <input
+          type="password"
           className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-white focus:border-blue-500 outline-none transition-all"
-          placeholder="Password" 
-          value={password} 
-          onChange={(e) => setPassword(e.target.value)} 
-          required 
+          placeholder="Password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          required
         />
       </div>
 
       <div className="space-y-2">
         <label className="text-[10px] font-mono text-slate-500 uppercase tracking-widest flex justify-between">
-          Verify Physical Location 
+          Verify Base Depot Location
           {coords ? <span className="text-blue-500 text-[8px]">COORDINATES LOCKED</span> : <span className="text-red-500 text-[8px]">REQUIRED</span>}
         </label>
         <LocationPicker onLocationSelect={(c) => setCoords(c)} />
       </div>
 
-      <button 
-        disabled={!coords || isLoading} 
+      <button
+        disabled={!coords || isLoading}
         className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 rounded-xl flex justify-center items-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-[0_0_20px_rgba(37,99,235,0.2)]"
       >
         {isLoading ? <Loader2 className="animate-spin" /> : <UserPlus size={18} />}

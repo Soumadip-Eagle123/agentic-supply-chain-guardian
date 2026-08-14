@@ -5,7 +5,7 @@ const PORT = 8000
 import cors from 'cors';
 const secret = 'jellyfish-baskingshark'
 import { authRouter } from './routes/auth.js'
-import { shipmentRouter, allRouter, inventoryRouter } from './routes/shipment.js'
+import { shipmentRouter, allRouter, inventoryRouter, transporterRouter } from './routes/shipment.js'
 app.use(express.json()) 
 console.log(process.env.SUPABASE_URL)
 const isProduction = process.env.NODE_ENV === 'production';
@@ -32,6 +32,8 @@ app.use('/api/auth', authRouter);
 app.use('/api/shipment', allRouter);
 app.use('/api/shipment/:userID', shipmentRouter);
 app.use('/api/inventory/:userID', inventoryRouter);
+
+app.use('/api/transporter/:transporterID', transporterRouter);
 
 
 app.listen(PORT, () => { 

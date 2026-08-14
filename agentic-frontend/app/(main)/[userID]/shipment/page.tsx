@@ -27,7 +27,7 @@ export default function ShipmentHub({ params }: { params: Promise<{ userID: stri
       icon: Map,
       color: 'bg-purple-500'
     },
-  ];
+  ];  
 
   return (
     <div className="space-y-6">

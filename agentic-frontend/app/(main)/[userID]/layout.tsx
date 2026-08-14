@@ -2,16 +2,17 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
-import { 
-  LayoutDashboard, 
-  Send, 
-  Package, 
-  Map as MapIcon, 
-  LogOut, 
+import {
+  LayoutDashboard,
+  Send,
+  Package,
+  Map as MapIcon,
+  LogOut,
   Activity,
   User,
   ScrollText,
-  Layers 
+  Layers,
+  Truck
 } from 'lucide-react';
 import Cookies from 'js-cookie';
 
@@ -34,15 +35,12 @@ export default function DashboardLayout({
   }, []);
 
   const handleLogout = async () => {
-    const logoutPath = role === 'warehouse' ? 'warehouse' : 'user';
-    const API = process.env.NEXT_PUBLIC_API_URL;
+    const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
     try {
-      await fetch(`${API}/api/auth/logout/${logoutPath}`, 
-        {
-          method: 'GET',
-          credentials: 'include',
-        }
-      );
+      await fetch(`${API}/api/auth/logout/${role || 'user'}`, {
+        method: 'GET',
+        credentials: 'include',
+      });
     } catch (err) {
       console.error("Logout cleanup failed");
     }
@@ -52,54 +50,58 @@ export default function DashboardLayout({
   };
 
   const navItems = [
-    { 
-      name: 'Intelligence Feed', 
-      href: `/${userID}/shipment/manage`, 
+    {
+      name: 'Transporter Cockpit',
+      href: `/${userID}/transporter`,
+      icon: Truck,
+      show: role === 'transporter'
+    },
+    {
+      name: 'Intelligence Feed',
+      href: `/${userID}/shipment/manage`,
       icon: LayoutDashboard,
-      show: true 
+      show: true
     },
-    { 
-      name: 'Global Tracker', 
-      href: `/${userID}/shipment/track`, 
+    {
+      name: 'Global Tracker',
+      href: `/${userID}/shipment/track`,
       icon: MapIcon,
-      show: true 
+      show: true
     },
-    { 
-      name: 'Initiate Dispatch', 
-      href: `/${userID}/shipment/send`, 
+    {
+      name: 'Initiate Dispatch',
+      href: `/${userID}/shipment/send`,
       icon: Send,
-      show: role === 'user' 
+      show: role === 'user'
     },
-    { 
-      name: 'Stock Monitor', 
-      href: `/${userID}/warehouse/monitor`, 
+    {
+      name: 'Stock Monitor',
+      href: `/${userID}/warehouse/monitor`,
       icon: Activity,
-      show: role === 'warehouse' 
+      show: role === 'warehouse'
     },
-    { 
-      name: 'Update Inventory', 
-      href: `/${userID}/warehouse/update`, 
+    {
+      name: 'Update Inventory',
+      href: `/${userID}/warehouse/update`,
       icon: Package,
-      show: role === 'warehouse' 
+      show: role === 'warehouse'
     },
-    // INJECTED KNOWLEDGE CORE LINK: Visible to all operators
-    { 
-      name: 'Knowledge Matrix', 
-      href: `/${userID}/knowledge`, 
+    {
+      name: 'Knowledge Matrix',
+      href: `/${userID}/knowledge`,
       icon: ScrollText,
-      show: true 
+      show: true
     },
-    { 
-    name: 'Global Warehouse Stock', 
-    href: `/${userID}/global-inventory`, 
-    icon: Layers,
-    show: true // Expose globally to let cross-functional managers query raw allocations
-  }
+    {
+      name: 'Global Warehouse Stock',
+      href: `/${userID}/global-inventory`,
+      icon: Layers,
+      show: true
+    }
   ];
 
   return (
     <div className="flex h-[calc(100vh-65px)] overflow-hidden bg-transparent">
-      {/* SIDEBAR - Semi-transparent with backdrop blur to show background animation */}
       <aside className="w-64 border-r border-slate-800 bg-slate-900/40 backdrop-blur-md p-4 flex flex-col z-20">
         <div className="mb-8 px-4">
           <div className="flex items-center gap-3 py-2 px-3 bg-slate-800/40 rounded-xl border border-slate-700/50">
@@ -109,7 +111,11 @@ export default function DashboardLayout({
             <div className="overflow-hidden">
               <p className="text-[9px] font-mono text-slate-500 uppercase leading-none mb-1 tracking-widest">Operator</p>
               <p className="text-sm font-bold text-white truncate uppercase tracking-tight">
-                {role === 'warehouse' ? 'Warehouse Manager' : 'Store Manager'}
+                {role === 'warehouse' 
+                  ? 'Warehouse Manager' 
+                  : role === 'transporter' 
+                  ? 'Transporter Driver' 
+                  : 'Store Manager'}
               </p>
             </div>
           </div>

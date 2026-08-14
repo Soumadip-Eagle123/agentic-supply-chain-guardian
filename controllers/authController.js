@@ -1,5 +1,5 @@
-import bcrypt from 'bcryptjs'
-import db from '../db/db.js'
+import bcrypt from 'bcryptjs';
+import db from '../db/db.js';
 
 export async function signup(req, res) {
     let { username, password, role, location_coords } = req.body;
@@ -8,9 +8,9 @@ export async function signup(req, res) {
     if (!location_coords || !Array.isArray(location_coords)) {
         return res.status(400).json({ error: "Please select your location on the map." });
     }
-    
-    if (!['user', 'warehouse'].includes(role))
-        return res.status(400).json({ error: "Role must be 'user' or 'warehouse'" });
+
+    if (!['user', 'warehouse', 'transporter'].includes(role))
+        return res.status(400).json({ error: "Role must be 'user', 'warehouse', or 'transporter'" });
     if (!username || !password)
         return res.status(400).json({ error: "Username or password field is empty!" });
 
@@ -38,14 +38,14 @@ export async function signup(req, res) {
             location_coords: location_coords
         });
 
-        return res.status(201).json({ Success: "User registered!" });
+        return res.status(201).json({ Success: "Registration successful!" });
     } catch (err) {
         console.error('Registration error:', err.message);
         res.status(500).json({ error: 'Registration failed. Please try again.' });
     }
 }
 
-export async function loginUser(req, res) {
+async function handleRoleLogin(req, res, expectedRole) {
     let { username, password } = req.body;
     if (!username || !password)
         return res.status(400).json({ error: "Username or password field is empty!" });
@@ -58,81 +58,40 @@ export async function loginUser(req, res) {
             .single();
 
         if (!result) return res.status(400).json({ error: "Wrong username or password" });
-
-        if (result.role !== 'user')
-        return res.status(403).json({ error: "Use the warehouse login endpoint" });
-
-        const isValid = await bcrypt.compare(password, result.password);
-        if (!isValid) return res.status(400).json({ error: "Wrong username or password" });
-
-        req.session.userId = result.userID;
-
-        await db.from('users').update({ loggedIn: 1 }).eq('"userID"', result.userID);
-
-
-        req.session.save((err) => {
-    if (err) {
-        console.error("Session Save Error:", err);
-        return res.status(500).json({ error: "Session synchronization failed" });
-    }
-    res.status(200).json({ 
-        Success: "Login successful!", 
-        userID: result.userID,
-        location_coords: result.location_coords
-    });
-});
-    } catch (err) {
-        console.error('Login error:', err.message);
-        res.status(500).json({ error: 'Login failed. Please try again.' });
-    }
-}
-
-export async function loginWarehouse(req, res) {
-    let { username, password } = req.body;
-    if (!username || !password)
-        return res.status(400).json({ error: "Username or password field is empty!" });
-
-    try {
-        const { data: result } = await db
-            .from('users')
-            .select('*')
-            .eq('username', username)
-            .single();
-
-        if (!result) return res.status(400).json({ error: "Wrong username or password" });
-
-        if (result.role !== 'warehouse')
-        return res.status(403).json({ error: "Use the user login endpoint" });
+        if (result.role !== expectedRole)
+            return res.status(403).json({ error: `Please use the ${expectedRole} login endpoint` });
 
         const isValid = await bcrypt.compare(password, result.password);
         if (!isValid) return res.status(400).json({ error: "Wrong username or password" });
 
         req.session.userId = result.userID;
+        req.session.role = result.role;
 
         await db.from('users').update({ loggedIn: 1 }).eq('"userID"', result.userID);
 
         req.session.save((err) => {
-    if (err) {
-        console.error("Session Save Error:", err);
-        return res.status(500).json({ error: "Session synchronization failed" });
-    }
-    res.status(200).json({ 
-        Success: "Login successful!", 
-        userID: result.userID,
-        location_coords: result.location_coords
-    });
-});
+            if (err) return res.status(500).json({ error: "Session synchronization failed" });
+            res.status(200).json({
+                Success: "Login successful!",
+                userID: result.userID,
+                role: result.role,
+                location_coords: result.location_coords
+            });
+        });
     } catch (err) {
-        console.error('Login error:', err.message);
         res.status(500).json({ error: 'Login failed. Please try again.' });
     }
 }
+
+export const loginUser = (req, res) => handleRoleLogin(req, res, 'user');
+export const loginWarehouse = (req, res) => handleRoleLogin(req, res, 'warehouse');
+export const loginTransporter = (req, res) => handleRoleLogin(req, res, 'transporter');
 
 export async function getWarehouses(req, res) {
     try {
         const { data, error } = await db
             .from('users')
-            .select('"userID", username')
+            .select('"userID", username, location_coords')
             .eq('role', 'warehouse');
 
         if (error) throw error;
@@ -143,11 +102,11 @@ export async function getWarehouses(req, res) {
 }
 
 async function performLogout(req, res) {
-    if (!req.session.userId)
-        return res.status(401).json({ error: "Not logged in" });
+    if (!req.session.userId) return res.status(401).json({ error: "Not logged in" });
     await db.from('users').update({ loggedIn: 0 }).eq('"userID"', req.session.userId);
     req.session.destroy(() => res.json({ message: 'Logged out' }));
 }
 
 export const logoutUser = performLogout;
 export const logoutWarehouse = performLogout;
+export const logoutTransporter = performLogout;

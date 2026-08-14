@@ -1,14 +1,14 @@
 'use client';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, use } from 'react';
 import IntelligenceCard from '@/app/components/UI/IntelligenceCard';
 import { Loader2, RefreshCw } from 'lucide-react';
 
 export default function ManageShipments({ params }: { params: Promise<{ userID: string }> }) {
-  const resolvedParams = React.use(params);
-  const { userID } = resolvedParams;
+  const { userID } = use(params);
   const [shipments, setShipments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const API = process.env.NEXT_PUBLIC_API_URL;
+  const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+
   const fetchShipments = async () => {
     setLoading(true);
     try {
@@ -19,8 +19,10 @@ export default function ManageShipments({ params }: { params: Promise<{ userID: 
           'Accept': 'application/json'
         }
       });
-      const data = await res.json();
-      setShipments(Object.values(data));
+      if (res.ok) {
+        const data = await res.json();
+        setShipments(Object.values(data));
+      }
     } catch (err) {
       console.error("Failed to sync with Guardian Network");
     } finally {
@@ -31,7 +33,7 @@ export default function ManageShipments({ params }: { params: Promise<{ userID: 
   const handleClear = async (id: number) => {
     try {
       const res = await fetch(`${API}/api/shipment/${userID}/deleteShipment/${id}`, {
-        method: 'DELETE', 
+        method: 'DELETE',
         credentials: 'include',
       });
       if (res.ok) {
@@ -42,18 +44,21 @@ export default function ManageShipments({ params }: { params: Promise<{ userID: 
     }
   };
 
-  useEffect(() => { fetchShipments(); }, []);
+  useEffect(() => { 
+    fetchShipments(); 
+  }, [userID]);
 
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-end border-b border-slate-800 pb-4">
         <div>
           <h2 className="text-2xl font-bold text-white">Intelligence Feed</h2>
-          <p className="text-slate-500 text-sm">Monitoring real-time supply chain risks and AI directives.</p>
+          <p className="text-slate-500 text-sm">Monitoring real-time supply chain risks, orders, and AI directives.</p>
         </div>
-        <button 
+        <button
           onClick={fetchShipments}
           className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 transition-colors"
+          title="Refresh Feed"
         >
           <RefreshCw size={20} className={loading ? 'animate-spin' : ''} />
         </button>
@@ -71,7 +76,12 @@ export default function ManageShipments({ params }: { params: Promise<{ userID: 
       ) : (
         <div className="grid grid-cols-1 gap-4">
           {shipments.map((s) => (
-            <IntelligenceCard key={s.id} shipment={s} onClear={handleClear} />
+            <IntelligenceCard 
+              key={s.id} 
+              shipment={s} 
+              onClear={handleClear} 
+              onRefresh={fetchShipments} 
+            />
           ))}
         </div>
       )}

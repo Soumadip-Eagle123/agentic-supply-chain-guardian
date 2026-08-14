@@ -2,39 +2,39 @@ import os
 import json
 import uuid
 import shutil
+import ollama
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from typing import List, Dict, Any, Optional
-
-# Import the official Groq client and dotenv to manage your production keys
-from groq import Groq
 from dotenv import load_dotenv
 
 from rag_engine import rag_engine
 
-# Load values from .env file
 load_dotenv()
+
+# Point to host machine Ollama daemon
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://host.docker.internal:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:1.5b")
+
+# No timeout set: Let the model take as much time as needed
+client = ollama.Client(host=OLLAMA_HOST)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Executes on service container start to check for baseline system documents."""
     default_pdf_path = "/app/data/defaults/global_SOP.pdf"
     if os.path.exists(default_pdf_path):
-        print(f"[BOOT]: Baseline corporate handbook detected at: {default_pdf_path}. Generating embedding vectors...")
+        print(f"[BOOT]: Seeding RAG manual...")
         try:
             chunks_indexed = rag_engine.process_and_index_pdf(
-                file_path=default_pdf_path, 
-                collection_name="supply_chain_defaults", 
+                file_path=default_pdf_path,
+                collection_name="supply_chain_defaults",
                 origin_name="global_SOP.pdf"
             )
-            print(f"[BOOT]: Global baseline data indexed successfully. Cached {chunks_indexed} default chunks.")
+            print(f"[BOOT]: Indexed {chunks_indexed} SOP chunks.")
         except Exception as e:
-            print(f"[BOOT ERROR]: Critical exception occurred while seeding defaults collection: {e}")
-    else:
-        print("[BOOT WARN]: Missing file at /app/data/defaults/global_SOP.pdf. Skipping automatic system seeding.")
-    
+            print(f"[BOOT ERROR]: {e}")
     yield
 
 class EnvironmentMetadata(BaseModel):
@@ -49,7 +49,7 @@ class Shipment(BaseModel):
     destination: str
     status: str
     userID: Optional[str] = None
-    metadata_env: Optional[EnvironmentMetadata] = None  # Single unified schema track
+    metadata_env: Optional[EnvironmentMetadata] = None
 
 class RebalanceRequest(BaseModel):
     product_name: str
@@ -67,7 +67,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def fix_json_strings(s):
+def fix_json_strings(s: str) -> str:
     result = []
     in_string = False
     escape_next = False
@@ -89,146 +89,85 @@ def fix_json_strings(s):
             result.append(char)
     return ''.join(result)
 
-# Initialize the Groq Client (It will find your GROQ_API_KEY from the environment automatically)
-client = Groq()
-
-@app.post("/upload-kb")
-async def upload_custom_user_intelligence(
-    file: UploadFile = File(...),
-    userID: str = Form(...)
-):
-    """Processes incoming custom operational safety PDFs and saves vectors into an isolated user silo."""
-    if not file.filename.endswith('.pdf'):
-        raise HTTPException(status_code=400, detail="Invalid file type extension. Only PDFs are supported.")
-
-    temp_dir = "/app/data/temp"
-    os.makedirs(temp_dir, exist_ok=True)
-    target_path = os.path.join(temp_dir, f"{uuid.uuid4().hex[:6]}_{file.filename}")
-
-    try:
-        with open(target_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-
-        collection_target = f"user_kb_collection_{userID}"
-        total_chunks = rag_engine.process_and_index_pdf(
-            file_path=target_path, 
-            collection_name=collection_target, 
-            origin_name=file.filename
-        )
-
-        return {"status": "SUCCESS", "chunks": total_chunks, "target_silo": collection_target}
-    except Exception as error:
-        raise HTTPException(status_code=500, detail=f"Ingestion process crash error: {str(error)}")
-    finally:
-        if os.path.exists(target_path):
-            os.remove(target_path)
-
 @app.post("/analyze")
 async def analyze_shipment(shipment: Shipment):
-    try:
-        env = shipment.metadata_env or EnvironmentMetadata()
-        
-        search_query = (
-            f"Safety regulations and transport constraints for shipping {shipment.product_name} "
-            f"via route {env.route_id} under road condition: {env.road_condition} "
-            f"and meteorological weather state: {env.current_weather}"
-        )
+    env = shipment.metadata_env or EnvironmentMetadata()
 
-        rag_context = rag_engine.fetch_combined_context(
-            search_query=search_query, 
-            user_id=shipment.userID
-        )
-        print(f"\n--- [DEBUG RAG CONTEXT FOR: {shipment.product_name}] ---\n{rag_context}\n---------------------------------------\n")
+    search_query = f"Safety rules for shipping {shipment.product_name} in {env.current_weather}"
+    rag_context = rag_engine.fetch_combined_context(
+        search_query=search_query,
+        user_id=shipment.userID
+    )
 
-        prompt = f"""
-        SYSTEM: You are the Autonomous Supply Chain Guardian routing terminal intelligence.
-        Evaluate transit parameters using the provided standard operating document rules.
-        
-        VERIFIED LOGISTICS MANUAL DIRECTIVES:
-        {rag_context if rag_context else "No specialized constraints recorded for these parameters."}
+    prompt = f"""
+SYSTEM: You are the Autonomous Supply Chain Guardian routing terminal.
+Analyze logistics telemetry and respond ONLY in valid JSON format.
 
-        LIVE SHIPMENT CORRIDOR TELEMETRY:
-        - Product Asset: {shipment.product_name}
-        - Quantity: {shipment.quantity}
-        - Current Route Corridor: {env.route_id}
-        - Surface Integrity Track: {env.road_condition}
-        - Weather Pattern: {env.current_weather}
-        - Pipeline Status: {shipment.status}
+OPERATIONAL SOP:
+{rag_context if rag_context else "Standard precautions apply."}
 
-        INSTRUCTIONS:
-        1. Determine risk_level (Low, Medium, High).
-        2. Provide reasoning citing context restrictions where applicable.
-        3. If risk is HIGH or MEDIUM, provide an 'ai_action' (a professional email draft to the destination manager).
-        4. If risk is LOW, 'ai_action' should be "No action required."
+CORRIDOR TELEMETRY:
+- Asset: {shipment.product_name} ({shipment.quantity} units)
+- Route: {env.route_id}
+- Surface: {env.road_condition}
+- Weather: {env.current_weather}
+- Status: {shipment.status}
 
-        Respond ONLY in valid JSON format with these exact keys:
-        "risk_level", "reasoning", "ai_action"
-        
-        The 'ai_action' value must be a single-line string. Use \\n for line breaks.
-        """
+RULES:
+1. Determine risk_level: "Low", "Medium", or "High".
+2. Provide concise reasoning citing regulations where applicable.
+3. If risk is High/Medium, provide an 'ai_action' draft to destination manager. Otherwise 'No action required.'
 
-        # Swapped client.chat for Groq cloud chat completions using Llama 3.3
-        response = client.chat.completions.create(
-            model='llama-3.3-70b-versatile',
-            messages=[{'role': 'user', 'content': prompt}],
-            temperature=0.2
-        )
-        content = response.choices[0].message.content
-        
-        start = content.find('{')
-        end = content.rfind('}') + 1
-        json_str = fix_json_strings(content[start:end])
-        return json.loads(json_str)
-
-    except Exception as e:
-        print(f"[ANALYZE CRASH ERROR]: {str(e)}")
-        return {
-            "risk_level": "Medium",
-            "reasoning": f"Advanced RAG processing fault: {str(e)}",
-            "ai_action": "Manual dispatch review required immediately."
+OUTPUT STRICT JSON ONLY:
+{{
+    "risk_level": "Low" | "Medium" | "High",
+    "reasoning": "Brief explanation",
+    "ai_action": "Single line action"
+}}
+"""
+    response = client.chat(
+        model=OLLAMA_MODEL,
+        messages=[{'role': 'user', 'content': prompt}],
+        options={
+            'temperature': 0.1
         }
+    )
+    content = response['message']['content']
+    start = content.find('{')
+    end = content.rfind('}') + 1
+    return json.loads(fix_json_strings(content[start:end]))
 
 @app.post("/rebalance")
 async def analyze_rebalance(data: RebalanceRequest):
     inventory_summary = json.dumps(data.inventory_context, indent=2)
 
     prompt = f"""
-    SYSTEM: You are the Autonomous Supply Chain Guardian.
-    TASK: Find a source warehouse to restock {data.product_name}.
-    REQUIRED: {data.constant_restock_qty} units.
-    DEFICIT HUB ID: {data.deficit_warehouse_id}.
+SYSTEM: Autonomous Supply Chain Guardian.
+TASK: Choose source warehouse to restock {data.product_name} by {data.constant_restock_qty} units for Deficit Hub {data.deficit_warehouse_id}.
 
-    INVENTORY DATA:
-    {inventory_summary}
+DATA:
+{inventory_summary}
 
-    RULES:
-    1. Source warehouse must have (Current Stock - {data.constant_restock_qty}) > its own min_threshold.
-    2. Choose the hub with the LARGEST surplus.
-    3. If no hub qualifies, set "status" to "INSUFFICIENT".
+RULES:
+1. Source must have (Stock - {data.constant_restock_qty}) > min_threshold.
+2. Select hub with largest surplus. If none qualify, status = "INSUFFICIENT".
 
-    RESPONSE FORMAT (JSON ONLY):
-    {{
-        "status": "EXECUTE" | "INSUFFICIENT",
-        "source_id": int,
-        "qty": int,
-        "reasoning": "Single line explanation"
-    }}
-    """
-
-    try:
-        # Swapped client.chat for Groq cloud chat completions using Llama 3.3
-        response = client.chat.completions.create(
-            model='llama-3.3-70b-versatile',
-            messages=[{'role': 'user', 'content': prompt}],
-            temperature=0.1
-        )
-        content = response.choices[0].message.content
-
-        start = content.find('{')
-        end = content.rfind('}') + 1
-        json_str = content[start:end]
-        json_str = fix_json_strings(json_str)
-        return json.loads(json_str)
-    except Exception as e:
-        print(f"REBALANCE_AI_FAULT: {str(e)}")
-        return {"status": "INSUFFICIENT", "source_id": None, "qty": 0, "reasoning": "AI logic error."}
+OUTPUT STRICT JSON ONLY:
+{{
+    "status": "EXECUTE" | "INSUFFICIENT",
+    "source_id": 1,
+    "qty": {data.constant_restock_qty},
+    "reasoning": "Explanation"
+}}
+"""
+    response = client.chat(
+        model=OLLAMA_MODEL,
+        messages=[{'role': 'user', 'content': prompt}],
+        options={
+            'temperature': 0.1
+        }
+    )
+    content = response['message']['content']
+    start = content.find('{')
+    end = content.rfind('}') + 1
+    return json.loads(fix_json_strings(content[start:end]))
