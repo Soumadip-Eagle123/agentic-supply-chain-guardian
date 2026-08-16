@@ -10,9 +10,9 @@ import {
   LogOut,
   Activity,
   User,
-  ScrollText,
-  Layers,
-  Truck
+  Truck,
+  FileText,
+  Boxes
 } from 'lucide-react';
 import Cookies from 'js-cookie';
 
@@ -28,11 +28,31 @@ export default function DashboardLayout({
   const router = useRouter();
   const pathname = usePathname();
   const [role, setRole] = useState<string | null>(null);
+  const [username, setUsername] = useState<string>('');
 
   useEffect(() => {
     const userRole = Cookies.get('role');
     setRole(userRole || 'user');
-  }, []);
+
+    const fetchUserData = async () => {
+      const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+      try {
+        const res = await fetch(`${API}/api/auth/me`, {
+          credentials: 'include',
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setUsername(data.username || `User #${userID}`);
+        } else {
+          setUsername(`User #${userID}`);
+        }
+      } catch (err) {
+        setUsername(`User #${userID}`);
+      }
+    };
+
+    fetchUserData();
+  }, [userID]);
 
   const handleLogout = async () => {
     const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
@@ -50,30 +70,46 @@ export default function DashboardLayout({
   };
 
   const navItems = [
+    // 1. Transporter-Only Cockpit
     {
-      name: 'Transporter Cockpit',
+      name: 'Delivery Cockpit',
       href: `/${userID}/transporter`,
       icon: Truck,
       show: role === 'transporter'
     },
+    // 2. Shared Operations (Store & Warehouse)
     {
-      name: 'Intelligence Feed',
+      name: 'Shipment Tracker',
       href: `/${userID}/shipment/manage`,
       icon: LayoutDashboard,
-      show: true
+      show: role === 'user' || role === 'warehouse'
     },
     {
-      name: 'Global Tracker',
+      name: 'Network Inventory',
+      href: `/${userID}/global-inventory`,
+      icon: Boxes,
+      show: role === 'user' || role === 'warehouse'
+    },
+    {
+      name: 'Live Corridor Map',
       href: `/${userID}/shipment/track`,
       icon: MapIcon,
-      show: true
+      show: role === 'user' || role === 'warehouse'
     },
+    {
+      name: 'Safety Guidelines',
+      href: `/${userID}/knowledge`,
+      icon: FileText,
+      show: role === 'user' || role === 'warehouse'
+    },
+    // 3. Store-Only Action
     {
       name: 'Initiate Dispatch',
       href: `/${userID}/shipment/send`,
       icon: Send,
       show: role === 'user'
     },
+    // 4. Warehouse-Only Inventory Controls
     {
       name: 'Stock Monitor',
       href: `/${userID}/warehouse/monitor`,
@@ -85,18 +121,6 @@ export default function DashboardLayout({
       href: `/${userID}/warehouse/update`,
       icon: Package,
       show: role === 'warehouse'
-    },
-    {
-      name: 'Knowledge Matrix',
-      href: `/${userID}/knowledge`,
-      icon: ScrollText,
-      show: true
-    },
-    {
-      name: 'Global Warehouse Stock',
-      href: `/${userID}/global-inventory`,
-      icon: Layers,
-      show: true
     }
   ];
 
@@ -109,7 +133,7 @@ export default function DashboardLayout({
               <User size={18} />
             </div>
             <div className="overflow-hidden">
-              <p className="text-[9px] font-mono text-slate-500 uppercase leading-none mb-1 tracking-widest">Operator</p>
+              <p className="text-[9px] font-mono text-slate-500 uppercase leading-none mb-1 tracking-widest">Account Role</p>
               <p className="text-sm font-bold text-white truncate uppercase tracking-tight">
                 {role === 'warehouse' 
                   ? 'Warehouse Manager' 
@@ -149,8 +173,11 @@ export default function DashboardLayout({
             <LogOut size={18} className="group-hover:-translate-x-1 transition-transform" />
             <span className="font-medium text-sm uppercase tracking-wider">Terminate Session</span>
           </button>
-          <div className="px-4 py-1">
-            <p className="text-[8px] font-mono text-slate-600 uppercase tracking-[0.3em] text-center">Node: {userID}</p>
+          
+          <div className="px-4 py-1 text-center">
+            <p className="text-[11px] font-sans font-medium text-slate-400 truncate">
+              User: <span className="text-white font-bold">{username || `User #${userID}`}</span>
+            </p>
           </div>
         </div>
       </aside>

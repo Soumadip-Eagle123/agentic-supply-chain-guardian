@@ -43,7 +43,7 @@ export default function UpdateInventory({ params }: { params: Promise<{ userID: 
     <div className="max-w-2xl mx-auto space-y-6">
       <div className="border-b border-slate-800 pb-4">
         <h2 className="text-2xl font-bold text-white">Stock Acquisition</h2>
-        <p className="text-slate-500 text-sm">Synchronize batch arrivals with the Guardian Command Center.</p>
+        <p className="text-slate-500 text-sm">Register incoming shipments to update available inventory across all stores.</p>
       </div>
 
       <form onSubmit={handleSubmit} className="bg-slate-900 border border-slate-800 rounded-2xl p-8 space-y-6">

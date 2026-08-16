@@ -51,11 +51,11 @@ class IngestionBrain:
             print(f"[RAG ENGINE COMPILATION FAILURE]: {str(e)}")
             raise e
 
-    def fetch_combined_context(self, search_query: str, user_id: Optional[str] = None, top_k: int = 3) -> str:
-        """Queries custom collections if present; falls back or blends with defaults."""
+    def fetch_combined_context(self, search_query: str, user_id: Optional[str] = None, top_k: int = 5) -> str:
         query_vector = self.encoder.encode([search_query]).tolist()
         context_fragments = []
-        
+
+        # 1. Search user collection first
         if user_id and user_id != "undefined":
             user_collection_name = f"user_kb_collection_{user_id}"
             try:
@@ -64,9 +64,24 @@ class IngestionBrain:
                     user_results = user_coll.query(query_embeddings=query_vector, n_results=top_k)
                     if user_results and user_results.get('documents') and user_results['documents'][0]:
                         for doc in user_results['documents'][0]:
-                            context_fragments.append(f"[Custom Override Guideline]: {doc}")
+                            # Filter out pure citation blocks if desired
+                            context_fragments.append(f"[Custom Corridor Guideline]: {doc}")
             except Exception:
-                pass 
+                pass
+
+        # 2. Fallback to any active collection
+        if not context_fragments:
+            for col in self.chroma_client.list_collections():
+                if col.name.startswith("user_kb_collection_") and col.count() > 0:
+                    try:
+                        res = col.query(query_embeddings=query_vector, n_results=top_k)
+                        if res and res.get('documents') and res['documents'][0]:
+                            for doc in res['documents'][0]:
+                                context_fragments.append(f"[Network Corridor Knowledge]: {doc}")
+                    except Exception:
+                        pass
+
+        # 3. Global defaults
         if not context_fragments:
             try:
                 default_results = self.default_collection.query(query_embeddings=query_vector, n_results=top_k)

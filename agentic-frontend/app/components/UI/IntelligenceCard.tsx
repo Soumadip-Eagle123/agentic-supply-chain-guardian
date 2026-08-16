@@ -13,7 +13,8 @@ import {
   CheckCircle2, 
   Loader2, 
   Truck, 
-  Clock 
+  Clock,
+  Ban
 } from 'lucide-react';
 
 interface ShipmentProps {
@@ -42,6 +43,7 @@ export default function IntelligenceCard({ shipment, onClear, onRefresh }: Shipm
   const currentUserID = Number(params.userID);
   const userRole = Cookies.get('role');
   const [isAccepting, setIsAccepting] = useState(false);
+  const [isRejecting, setIsRejecting] = useState(false);
 
   const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
 
@@ -75,6 +77,35 @@ export default function IntelligenceCard({ shipment, onClear, onRefresh }: Shipm
       alert("Network communication failure with Central Hub.");
     } finally {
       setIsAccepting(false);
+    }
+  };
+
+  const handleRejectOrder = async () => {
+    const reason = prompt("Enter reason for rejecting / cancelling this shipment:");
+    if (reason === null) return;
+
+    setIsRejecting(true);
+    try {
+      const res = await fetch(`${API}/api/shipment/${currentUserID}/cancel-shipment`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          shipmentID: shipment.id,
+          reason: reason || 'Warehouse inventory constraint or logistical hold'
+        })
+      });
+
+      if (res.ok) {
+        if (onRefresh) onRefresh();
+      } else {
+        const data = await res.json();
+        alert(data.error || "Cancellation failed");
+      }
+    } catch (err) {
+      alert("Network communication failure.");
+    } finally {
+      setIsRejecting(false);
     }
   };
 
@@ -153,21 +184,41 @@ export default function IntelligenceCard({ shipment, onClear, onRefresh }: Shipm
             )}
           </div>
 
-          {/* Conditional Accept & Dispatch Action for Origin Warehouse */}
-          {isPendingAcceptance && isSourceWarehouse && (
-            <div className="mt-4 pt-3 border-t border-dashed border-slate-800 flex items-center justify-between bg-blue-950/20 p-3 rounded-xl">
+          {/* Actions for Origin Warehouse */}
+          {isSourceWarehouse && shipment.status !== 'Delivered' && !shipment.status?.includes('Cancelled') && (
+            <div className="mt-4 pt-3 border-t border-dashed border-slate-800 flex items-center justify-between bg-slate-950/50 p-3 rounded-xl">
               <div className="space-y-0.5">
-                <p className="text-xs font-bold text-blue-400 uppercase">Incoming Dispatch Request</p>
-                <p className="text-[10px] text-slate-400">Confirm order to deduct inventory and assign transporter.</p>
+                <p className="text-xs font-bold text-slate-300 uppercase">
+                  {isPendingAcceptance ? "Incoming Dispatch Request" : "Active Dispatch Control"}
+                </p>
+                <p className="text-[10px] text-slate-500">
+                  {isPendingAcceptance 
+                    ? "Confirm order to deduct inventory or reject request." 
+                    : "Cancel shipment to rollback reserved physical stock."}
+                </p>
               </div>
-              <button
-                onClick={handleAcceptOrder}
-                disabled={isAccepting}
-                className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-2 rounded-lg flex items-center gap-1.5 text-xs transition-all shadow-[0_0_15px_rgba(16,185,129,0.3)] disabled:opacity-50"
-              >
-                {isAccepting ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
-                ACCEPT & DISPATCH
-              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleRejectOrder}
+                  disabled={isRejecting}
+                  className="bg-red-600/10 hover:bg-red-600/20 text-red-400 border border-red-500/30 px-3 py-2 rounded-lg flex items-center gap-1 text-xs font-bold transition-all disabled:opacity-50"
+                >
+                  {isRejecting ? <Loader2 size={13} className="animate-spin" /> : <Ban size={13} />}
+                  {isPendingAcceptance ? "REJECT" : "CANCEL"}
+                </button>
+
+                {isPendingAcceptance && (
+                  <button
+                    onClick={handleAcceptOrder}
+                    disabled={isAccepting}
+                    className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-2 rounded-lg flex items-center gap-1.5 text-xs transition-all shadow-[0_0_15px_rgba(16,185,129,0.3)] disabled:opacity-50"
+                  >
+                    {isAccepting ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                    ACCEPT & DISPATCH
+                  </button>
+                )}
+              </div>
             </div>
           )}
         </div>

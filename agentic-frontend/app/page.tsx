@@ -13,7 +13,7 @@ export default function LandingPage() {
           Autonomous <br /> <span className="text-blue-500">Supply Chain</span>
         </h2>
         <p className="text-slate-400 text-lg md:text-xl max-w-2xl mx-auto leading-relaxed">
-          The Agentic Guardian is a professional-tier logistics supervisor. Driven by Llama 3, it predicts risks, automates rebalancing, and secures your supply chain.
+          Real-Time Supply Chain Visibility & Disruption Prevention. Connect your warehouses, delivery fleet, and retail facilities in a single unified command center.
         </p>
         <div className="flex flex-col sm:flex-row items-center justify-center gap-6">
           <Link href="/login/user" className="w-full sm:w-64 py-5 bg-blue-600 rounded-2xl text-white font-bold uppercase tracking-widest text-sm hover:shadow-[0_0_20px_rgba(37,99,235,0.4)] transition-all">

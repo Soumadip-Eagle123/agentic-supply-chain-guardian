@@ -52,8 +52,8 @@ export default function ManageShipments({ params }: { params: Promise<{ userID: 
     <div className="space-y-6">
       <div className="flex justify-between items-end border-b border-slate-800 pb-4">
         <div>
-          <h2 className="text-2xl font-bold text-white">Intelligence Feed</h2>
-          <p className="text-slate-500 text-sm">Monitoring real-time supply chain risks, orders, and AI directives.</p>
+          <h2 className="text-2xl font-bold text-white">Active Shipments</h2>
+          <p className="text-slate-500 text-sm">Track real-time delivery status, order approvals, and safety notifications.</p>
         </div>
         <button
           onClick={fetchShipments}

@@ -16,9 +16,8 @@ load_dotenv()
 
 # Point to host machine Ollama daemon
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://host.docker.internal:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:1.5b")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:8b")
 
-# No timeout set: Let the model take as much time as needed
 client = ollama.Client(host=OLLAMA_HOST)
 
 @asynccontextmanager
@@ -49,6 +48,7 @@ class Shipment(BaseModel):
     destination: str
     status: str
     userID: Optional[str] = None
+    sourceID: Optional[str] = None
     metadata_env: Optional[EnvironmentMetadata] = None
 
 class RebalanceRequest(BaseModel):
@@ -93,36 +93,48 @@ def fix_json_strings(s: str) -> str:
 async def analyze_shipment(shipment: Shipment):
     env = shipment.metadata_env or EnvironmentMetadata()
 
-    search_query = f"Safety rules for shipping {shipment.product_name} in {env.current_weather}"
+    # Search for both route conditions and asset rules
+    search_query = f"{shipment.destination} road infrastructure condition potholes damage {shipment.product_name} transit rules"
+    
+    # Retrieve top 5 chunks to get past cover pages/citations
     rag_context = rag_engine.fetch_combined_context(
         search_query=search_query,
-        user_id=shipment.userID
+        user_id=shipment.userID,
+        top_k=5
     )
 
-    prompt = f"""
-SYSTEM: You are the Autonomous Supply Chain Guardian routing terminal.
-Analyze logistics telemetry and respond ONLY in valid JSON format.
+    print("\n" + "="*50)
+    print(f"[RAG ENGINE] Target Asset: {shipment.product_name}")
+    print(f"[RAG ENGINE] Destination: {shipment.destination}")
+    print(f"[RAG ENGINE] Retrieved Context:\n{rag_context if rag_context else '<< NO RELEVANT CHUNKS FOUND >>'}")
+    print("="*50 + "\n")
 
-OPERATIONAL SOP:
+    prompt = f"""
+SYSTEM: You are the Autonomous Supply Chain Guardian routing intelligence.
+Analyze shipment telemetry strictly following the provided operational briefings.
+
+OPERATIONAL BRIEFINGS & CORRIDOR MANUALS:
 {rag_context if rag_context else "Standard precautions apply."}
 
-CORRIDOR TELEMETRY:
+LIVE TELEMETRY:
 - Asset: {shipment.product_name} ({shipment.quantity} units)
+- Corridor: {shipment.source} -> {shipment.destination}
 - Route: {env.route_id}
-- Surface: {env.road_condition}
+- Surface Condition: {env.road_condition}
 - Weather: {env.current_weather}
-- Status: {shipment.status}
+- Pipeline Status: {shipment.status}
 
 RULES:
-1. Determine risk_level: "Low", "Medium", or "High".
-2. Provide concise reasoning citing regulations where applicable.
-3. If risk is High/Medium, provide an 'ai_action' draft to destination manager. Otherwise 'No action required.'
+1. Review the Corridor Manuals. If road damage, dilapidated pavements, potholes, or construction are reported along the route or at the destination (e.g. Kanpur/Panki), assign "High" or "Medium" risk regardless of whether the product is hazardous.
+2. If asset is Hazardous (Explosives, Batteries, Chemicals, Acid), assign "High" risk.
+3. In 'reasoning', cite the specific road conditions or hazards found in the briefing.
+4. If risk is High or Medium, 'ai_action' MUST provide an actionable mitigation directive to the receiver/driver. If risk is Low, set 'ai_action' to "No action required."
 
 OUTPUT STRICT JSON ONLY:
 {{
-    "risk_level": "Low" | "Medium" | "High",
-    "reasoning": "Brief explanation",
-    "ai_action": "Single line action"
+    "risk_level": "High" | "Medium" | "Low",
+    "reasoning": "Brief explanation citing specific corridor and asset conditions",
+    "ai_action": "Actionable directive"
 }}
 """
     response = client.chat(
@@ -171,3 +183,37 @@ OUTPUT STRICT JSON ONLY:
     start = content.find('{')
     end = content.rfind('}') + 1
     return json.loads(fix_json_strings(content[start:end]))
+
+@app.post("/upload-kb")
+async def upload_custom_user_intelligence(
+    file: UploadFile = File(...),
+    userID: str = Form(...)
+):
+    if not file.filename.endswith('.pdf'):
+        raise HTTPException(status_code=400, detail="Invalid file type. Only PDFs are supported.")
+
+    temp_dir = "/app/data/temp"
+    os.makedirs(temp_dir, exist_ok=True)
+    target_path = os.path.join(temp_dir, f"{uuid.uuid4().hex[:6]}_{file.filename}")
+
+    try:
+        with open(target_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        collection_target = f"user_kb_collection_{userID}"
+        total_chunks = rag_engine.process_and_index_pdf(
+            file_path=target_path,
+            collection_name=collection_target,
+            origin_name=file.filename
+        )
+
+        return {
+            "status": "SUCCESS",
+            "chunks": total_chunks,
+            "target_silo": collection_target
+        }
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=f"Ingestion failed: {str(error)}")
+    finally:
+        if os.path.exists(target_path):
+            os.remove(target_path)

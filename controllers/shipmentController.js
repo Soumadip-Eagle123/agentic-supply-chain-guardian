@@ -3,9 +3,14 @@ import axios from 'axios';
 
 // Haversine formula to compute geodesic distance in Kilometers
 function calculateDistanceKm(coords1, coords2) {
-    const [lat1, lon1] = coords1;
-    const [lat2, lon2] = coords2;
-    const R = 6371; // Earth's radius in km
+    if (!Array.isArray(coords1) || !Array.isArray(coords2) || coords1.length < 2 || coords2.length < 2) {
+        return Infinity;
+    }
+    const [lat1, lon1] = coords1.map(Number);
+    const [lat2, lon2] = coords2.map(Number);
+    if (isNaN(lat1) || isNaN(lon1) || isNaN(lat2) || isNaN(lon2)) return Infinity;
+
+    const R = 6371; // Earth's radius in KM
     const dLat = (lat2 - lat1) * (Math.PI / 180);
     const dLon = (lon2 - lon1) * (Math.PI / 180);
     const a =
@@ -18,27 +23,44 @@ function calculateDistanceKm(coords1, coords2) {
 
 // Find closest available transporter relative to the origin warehouse
 async function findClosestTransporter(warehouseCoords) {
-    const { data: transporters, error } = await db
-        .from('users')
-        .select('"userID", username, location_coords')
-        .eq('role', 'transporter')
-        .not('location_coords', 'is', null);
+    try {
+        const { data: transporters, error } = await db
+            .from('users')
+            .select('userID, username, location_coords')
+            .eq('role', 'transporter');
 
-    if (error || !transporters || transporters.length === 0) return null;
+        if (error || !transporters || transporters.length === 0) {
+            console.warn("[TRANSPORTER MATCH]: No registered transporters found in database.");
+            return null;
+        }
 
-    let closest = null;
-    let minDistance = Infinity;
+        let closest = null;
+        let minDistance = Infinity;
 
-    for (const driver of transporters) {
-        if (Array.isArray(driver.location_coords) && driver.location_coords.length === 2) {
-            const dist = calculateDistanceKm(warehouseCoords, driver.location_coords);
-            if (dist < minDistance) {
-                minDistance = dist;
-                closest = { ...driver, distanceKm: dist.toFixed(2) };
+        // Try geometric match first
+        if (Array.isArray(warehouseCoords) && warehouseCoords.length === 2) {
+            for (const driver of transporters) {
+                if (Array.isArray(driver.location_coords) && driver.location_coords.length === 2) {
+                    const dist = calculateDistanceKm(warehouseCoords, driver.location_coords);
+                    if (dist < minDistance) {
+                        minDistance = dist;
+                        closest = { ...driver, distanceKm: dist.toFixed(2) };
+                    }
+                }
             }
         }
+
+        // Fallback: If no geometric match found, default to first registered driver
+        if (!closest && transporters.length > 0) {
+            closest = transporters[0];
+            console.log(`[TRANSPORTER MATCH]: Defaulting to driver ${closest.username} (ID: ${closest.userID})`);
+        }
+
+        return closest;
+    } catch (e) {
+        console.error("[TRANSPORTER MATCH EXCEPTION]:", e.message);
+        return null;
     }
-    return closest;
 }
 
 async function getUserData(userID) {
@@ -51,11 +73,13 @@ async function getUserData(userID) {
     return data;
 }
 
-// 1. POST SHIPMENT (ORDER PLACEMENT - Enforces Stock Check & Marks as Pending Approval)
+// 1. ORDER PLACEMENT (B2W / W2B Request)
 export async function postShipment(req, res) {
-    const userID = Number(req.params.userID);
-    if (!req.session.userId || userID !== Number(req.session.userId)) {
-        return res.status(401).json({ Error: "Unauthorized" });
+    const sessionUserId = req.session?.userId;
+    const userID = Number(req.params.userID || sessionUserId);
+
+    if (!sessionUserId || userID !== Number(sessionUserId)) {
+        return res.status(401).json({ Error: "Unauthorized: Session expired or invalid." });
     }
 
     let { product_name, quantity, warehouseID } = req.body;
@@ -70,7 +94,6 @@ export async function postShipment(req, res) {
         const whUser = await getUserData(warehouseID);
         if (!bizUser || !whUser) return res.status(404).json({ error: "Parties not found." });
 
-        // STRICT VALIDATION: Check physical inventory
         const { data: inv, error: invErr } = await db.from('inventory')
             .select('*')
             .eq('product_name', product_name)
@@ -82,32 +105,41 @@ export async function postShipment(req, res) {
         }
 
         if (inv.current_stock < reqQty) {
-            return res.status(400).json({ 
-                error: `Insufficient stock. Requested: ${reqQty}, Available: ${inv.current_stock}` 
+            return res.status(400).json({
+                error: `Insufficient stock. Requested: ${reqQty}, Available: ${inv.current_stock}`
             });
         }
 
-        // Assign closest driver to warehouse
         const assignedDriver = await findClosestTransporter(whUser.location_coords);
 
         // AI Initial Route Scoring
-        const aiResponse = await axios.post('http://ai-service:8000/analyze', {
-            product_name, 
-            quantity: reqQty, 
-            source: whUser.username, 
-            destination: bizUser.username,
-            source_coords: whUser.location_coords, 
-            dest_coords: bizUser.location_coords, 
-            status: "Order Placed - Awaiting Warehouse Acceptance",
-            userID: String(userID),
-            metadata_env: {
-                route_id: `CORRIDOR-${warehouseID}-${userID}`,
-                road_condition: "Standard Transit Path",
-                current_weather: "Clear"
-            }
-        });
+        let aiRisk = 'Low';
+        let aiAction = 'Pending Origin Hub Confirmation';
 
-        // Insert shipment with accepted_by_origin = FALSE
+        try {
+            const aiResponse = await axios.post('http://ai-service:8000/analyze', {
+                product_name,
+                quantity: reqQty,
+                source: whUser.username,
+                destination: bizUser.username,
+                source_coords: whUser.location_coords,
+                dest_coords: bizUser.location_coords,
+                status: "Order Placed - Awaiting Warehouse Acceptance",
+                userID: String(userID),
+                metadata_env: {
+                    route_id: `CORRIDOR-${warehouseID}-${userID}`,
+                    road_condition: "Standard Transit Path",
+                    current_weather: "Clear"
+                }
+            });
+            if (aiResponse.data) {
+                aiRisk = aiResponse.data.risk_level || 'Low';
+                aiAction = aiResponse.data.ai_action || aiAction;
+            }
+        } catch (aiErr) {
+            console.warn("[AI SERVICE WARNING]: Falling back to baseline risk scoring.");
+        }
+
         const { data: insertedShipment, error: insertError } = await db.from('shipments').insert({
             userID: userID,
             sourceID: warehouseID,
@@ -118,19 +150,21 @@ export async function postShipment(req, res) {
             source_coords: whUser.location_coords,
             dest_coords: bizUser.location_coords,
             status: 'Awaiting Warehouse Acceptance',
-            risk: aiResponse.data.risk_level || 'Low',
-            ai_action: aiResponse.data.ai_action || 'Pending Origin Hub Confirmation',
+            risk: aiRisk,
+            ai_action: aiAction,
             displayToSource: true,
             displayToDest: true,
+            displaytotransporter: true,
             transporter_id: assignedDriver ? assignedDriver.userID : null,
             transit_step: 0,
+            is_picked_up: false,
             accepted_by_origin: false,
             shipment_type: 'W2B'
         }).select().single();
 
         if (insertError) throw insertError;
 
-        res.status(201).json({ 
+        return res.status(201).json({
             Success: "Order registered. Notification dispatched to Origin Warehouse for confirmation.",
             shipmentID: insertedShipment.id,
             assigned_driver: assignedDriver ? assignedDriver.username : "Auto-Assignment Pending"
@@ -138,19 +172,17 @@ export async function postShipment(req, res) {
 
     } catch (err) {
         console.error("Order submission failure:", err);
-        res.status(500).json({ Error: "Order placement failed: " + err.message });
+        return res.status(500).json({ Error: "Order placement failed: " + err.message });
     }
 }
 
-// 2. ACCEPT / DISPATCH SHIPMENT (Warehouse Confirms Order -> Stock is Deducted & Transit Begins)
-// 1. ACCEPT / DISPATCH SHIPMENT
-// 2. ACCEPT / DISPATCH SHIPMENT
+// 2. ACCEPT / DISPATCH SHIPMENT (Origin Warehouse Confirms & Triggers Auto-Rebalance)
 export async function acceptShipmentOrder(req, res) {
     const sessionUserId = req.session?.userId;
     const warehouseID = Number(sessionUserId || req.params.userID);
 
     if (!sessionUserId) {
-        return res.status(401).json({ error: "Unauthorized: Active session not found. Please log in." });
+        return res.status(401).json({ error: "Unauthorized: Active session not found." });
     }
 
     const { shipmentID } = req.body;
@@ -165,7 +197,6 @@ export async function acceptShipmentOrder(req, res) {
             return res.status(404).json({ error: "Shipment record not found." });
         }
 
-        // Verify that the currently logged-in warehouse is indeed the source
         if (Number(shipment.sourceID) !== Number(warehouseID)) {
             return res.status(403).json({ error: `Only the origin hub (Hub #${shipment.sourceID}) can accept this order.` });
         }
@@ -181,24 +212,97 @@ export async function acceptShipmentOrder(req, res) {
             .single();
 
         if (invErr || !inv || inv.current_stock < shipment.quantity) {
-            return res.status(400).json({ 
-                error: `Insufficient stock in Warehouse #${warehouseID}. Available: ${inv ? inv.current_stock : 0}` 
+            return res.status(400).json({
+                error: `Insufficient stock in Warehouse #${warehouseID}. Available: ${inv ? inv.current_stock : 0}`
             });
         }
 
         // Deduct physical inventory
         const newStock = inv.current_stock - shipment.quantity;
+        const needsRestock = newStock <= inv.min_threshold;
+
         await db.from('inventory').update({
             current_stock: newStock,
-            restocking_needed: newStock <= inv.min_threshold
+            restocking_needed: needsRestock
         }).eq('id', inv.id);
 
         // Advance transit state
         await db.from('shipments').update({
             accepted_by_origin: true,
-            status: 'Dispatched - In Transit (Checkpoint 1/10)',
-            transit_step: 1
+            status: 'Dispatched - Awaiting Driver Collection',
+            transit_step: 0
         }).eq('id', Number(shipmentID));
+
+        // AUTONOMOUS W2W REBALANCING TRIGGER
+        if (needsRestock) {
+            console.log(`[REBALANCE] Hub ${warehouseID} threshold breached for ${shipment.product_name}. Querying surplus nodes...`);
+            try {
+                const { data: invItems, error: invQueryErr } = await db.from('inventory')
+                    .select('warehouseID, current_stock, min_threshold')
+                    .eq('product_name', shipment.product_name)
+                    .neq('warehouseID', warehouseID)
+                    .not('warehouseID', 'is', null);
+
+                if (!invQueryErr && invItems && invItems.length > 0) {
+                    const warehouseIDs = invItems.map(i => i.warehouseID);
+                    const { data: userDetails } = await db.from('users')
+                        .select('userID, username, location_coords')
+                        .in('userID', warehouseIDs);
+
+                    const cleanContext = invItems.map(item => {
+                        const detail = userDetails?.find(u => u.userID === item.warehouseID);
+                        if (!detail) return null;
+                        return {
+                            warehouse_id: item.warehouseID,
+                            stock: item.current_stock,
+                            threshold: item.min_threshold,
+                            name: detail.username,
+                            coords: detail.location_coords
+                        };
+                    }).filter(Boolean);
+
+                    if (cleanContext.length > 0) {
+                        const agentRes = await axios.post('http://ai-service:8000/rebalance', {
+                            product_name: shipment.product_name,
+                            deficit_warehouse_id: warehouseID,
+                            inventory_context: cleanContext,
+                            constant_restock_qty: inv.min_threshold * 2
+                        });
+
+                        const decision = agentRes.data;
+                        if (decision.status === 'EXECUTE' && decision.source_id) {
+                            const sourceWH = await getUserData(decision.source_id);
+                            const destWH = await getUserData(warehouseID);
+
+                            // Propose W2W shipment for source warehouse confirmation
+                            await db.from('shipments').insert({
+                                sourceID: decision.source_id,
+                                userID: warehouseID,
+                                product_name: shipment.product_name,
+                                quantity: decision.qty,
+                                source: sourceWH?.username || `Hub #${decision.source_id}`,
+                                destination: destWH?.username || `Hub #${warehouseID}`,
+                                source_coords: sourceWH?.location_coords,
+                                dest_coords: destWH?.location_coords,
+                                shipment_type: 'W2W',
+                                status: 'AI Rebalance Proposed - Awaiting Surplus Hub Approval',
+                                risk: 'Low',
+                                ai_action: `Autonomous Rebalance: Requesting ${decision.qty} units from ${sourceWH?.username}.`,
+                                displayToSource: true,
+                                displayToDest: true,
+                                displaytotransporter: true,
+                                accepted_by_origin: false,
+                                is_w2w_confirmed: false,
+                                transit_step: 0
+                            });
+                            console.log(`[REBALANCE] W2W proposal generated from Hub ${decision.source_id} -> Hub ${warehouseID}`);
+                        }
+                    }
+                }
+            } catch (rebErr) {
+                console.error("[REBALANCE FAULT]:", rebErr.message);
+            }
+        }
 
         return res.status(200).json({ Success: "Order accepted. Cargo dispatched to assigned transporter." });
     } catch (err) {
@@ -207,13 +311,13 @@ export async function acceptShipmentOrder(req, res) {
     }
 }
 
-// 3. CONFIRM W2W REBALANCE
+// 3. CONFIRM W2W REBALANCE (Source Hub accepts transfer)
 export async function confirmW2WTransfer(req, res) {
     const sessionUserId = req.session?.userId;
     const sourceWarehouseID = Number(sessionUserId || req.params.userID);
 
     if (!sessionUserId) {
-        return res.status(401).json({ error: "Unauthorized: Active session not found. Please log in." });
+        return res.status(401).json({ error: "Unauthorized: Active session not found." });
     }
 
     const { shipmentID } = req.body;
@@ -222,6 +326,7 @@ export async function confirmW2WTransfer(req, res) {
         const { data: shipment, error: sErr } = await db.from('shipments')
             .select('*')
             .eq('id', Number(shipmentID))
+            .eq('shipment_type', 'W2W')
             .single();
 
         if (sErr || !shipment) {
@@ -242,7 +347,6 @@ export async function confirmW2WTransfer(req, res) {
             return res.status(400).json({ error: "Surplus stock no longer available." });
         }
 
-        // Deduct from surplus warehouse
         await db.from('inventory')
             .update({ current_stock: sourceInv.current_stock - shipment.quantity })
             .eq('id', sourceInv.id);
@@ -260,73 +364,100 @@ export async function confirmW2WTransfer(req, res) {
     }
 }
 
-// 4. TRANSPORTER STEPWISE TELEMETRY UPDATE (1/10 ... 10/10)
+// 4. CONFIRM PICKUP (Transporter confirms collection at origin warehouse)
+export async function confirmPickup(req, res) {
+    const sessionUserId = req.session?.userId;
+    const transporterID = Number(sessionUserId || req.params.transporterID);
+    const { shipmentID } = req.body;
+
+    if (!sessionUserId) {
+        return res.status(401).json({ error: "Unauthorized: Active driver session not found." });
+    }
+
+    try {
+        const { data: shipment, error: sErr } = await db.from('shipments')
+            .select('*')
+            .eq('id', Number(shipmentID))
+            .single();
+
+        if (sErr || !shipment) {
+            return res.status(404).json({ error: "Assigned cargo run not found." });
+        }
+
+        if (shipment.transporter_id && Number(shipment.transporter_id) !== transporterID) {
+            return res.status(403).json({ error: "This run is assigned to another transporter." });
+        }
+
+        await db.from('shipments').update({
+            is_picked_up: true,
+            status: 'Cargo Picked Up — En Route',
+            transit_step: 0
+        }).eq('id', Number(shipmentID));
+
+        return res.status(200).json({ Success: "Cargo collection confirmed. Active delivery begun." });
+    } catch (err) {
+        return res.status(500).json({ error: "Failed to confirm pickup: " + err.message });
+    }
+}
+
 export async function updateTransitStep(req, res) {
-    const transporterID = Number(req.params.transporterID);
+    const sessionUserId = req.session?.userId;
+    const transporterID = Number(sessionUserId || req.params.transporterID);
     const { shipmentID, step, hazard_report } = req.body;
 
-    if (!req.session.userId || transporterID !== Number(req.session.userId)) {
-        return res.status(401).json({ Error: "Unauthorized" });
+    if (!sessionUserId) {
+        return res.status(401).json({ Error: "Unauthorized: Active driver session not found." });
     }
 
     const stepNum = Number(step);
-    if (isNaN(stepNum) || stepNum < 1 || stepNum > 10) {
-        return res.status(400).json({ error: "Transit step must be an integer between 1 and 10." });
+    if (isNaN(stepNum) || stepNum < 0 || stepNum > 10) {
+        return res.status(400).json({ error: "Transit step must be an integer between 0 and 10." });
     }
 
     try {
         const { data: shipment } = await db.from('shipments')
             .select('*')
             .eq('id', shipmentID)
-            .eq('transporter_id', transporterID)
             .single();
 
         if (!shipment) return res.status(404).json({ error: "Assigned shipment not found." });
 
-        let statusText = `In Transit (Checkpoint ${stepNum}/10)`;
+        if (shipment.transporter_id && Number(shipment.transporter_id) !== transporterID) {
+            return res.status(403).json({ error: "Unauthorized access to this manifest." });
+        }
+
+        let statusText = stepNum === 10 ? 'Arrived at Destination — Awaiting Final Handover' : (stepNum === 0 ? 'Cargo Picked Up — En Route' : `In Transit (Checkpoint ${stepNum}/10)`);
         let riskScore = shipment.risk;
         let aiAction = shipment.ai_action;
 
-        // If at 10/10, complete delivery and credit destination inventory
-        if (stepNum === 10) {
-            statusText = "Delivered";
-
-            // If W2W, increment destination hub stock
-            if (shipment.shipment_type === 'W2W') {
-                const { data: destInv } = await db.from('inventory')
-                    .select('*')
-                    .eq('warehouseID', shipment.userID)
-                    .eq('product_name', shipment.product_name)
-                    .single();
-
-                if (destInv) {
-                    await db.from('inventory').update({
-                        current_stock: destInv.current_stock + shipment.quantity,
-                        restocking_needed: false
-                    }).eq('id', destInv.id);
+        if (hazard_report) {
+            try {
+                const aiRecheck = await axios.post('http://ai-service:8000/analyze', {
+                    product_name: shipment.product_name,
+                    quantity: shipment.quantity,
+                    source: shipment.source,
+                    destination: shipment.destination,
+                    source_coords: shipment.source_coords,
+                    dest_coords: shipment.dest_coords,
+                    status: `Driver Flagged: ${hazard_report} at Checkpoint ${stepNum}/10`,
+                    userID: String(shipment.userID),
+                    metadata_env: {
+                        route_id: `CORRIDOR-${shipment.sourceID}-${shipment.userID}`,
+                        road_condition: hazard_report,
+                        current_weather: "Dynamic Incident Reported"
+                    }
+                });
+                if (aiRecheck.data) {
+                    riskScore = aiRecheck.data.risk_level || riskScore;
+                    aiAction = aiRecheck.data.ai_action || aiAction;
                 }
+            } catch (aiErr) {
+                riskScore = "High";
+                aiAction = `HAZARD ALERT: ${hazard_report}. Proceed with caution.`;
             }
-        } else if (hazard_report) {
-            // Re-evaluate hazard through AI Agent
-            const aiRecheck = await axios.post('http://ai-service:8000/analyze', {
-                product_name: shipment.product_name,
-                quantity: shipment.quantity,
-                source: shipment.source,
-                destination: shipment.destination,
-                source_coords: shipment.source_coords,
-                dest_coords: shipment.dest_coords,
-                status: `Driver Flagged: ${hazard_report} at Checkpoint ${stepNum}/10`,
-                userID: String(shipment.userID),
-                metadata_env: {
-                    route_id: `CORRIDOR-${shipment.sourceID}-${shipment.userID}`,
-                    road_condition: hazard_report,
-                    current_weather: "Dynamic Incident Reported"
-                }
-            });
-            riskScore = aiRecheck.data.risk_level;
-            aiAction = aiRecheck.data.ai_action;
         }
 
+        // Save checkpoint progress (no inventory increment or record deletion here)
         await db.from('shipments').update({
             transit_step: stepNum,
             status: statusText,
@@ -334,54 +465,203 @@ export async function updateTransitStep(req, res) {
             ai_action: aiAction
         }).eq('id', shipmentID);
 
-        res.status(200).json({ 
+        return res.status(200).json({
             Success: `Progress logged: Checkpoint ${stepNum}/10`,
             status: statusText,
-            risk: riskScore 
+            risk: riskScore,
+            transit_step: stepNum
         });
 
     } catch (err) {
-        res.status(500).json({ error: "Failed to update step: " + err.message });
+        return res.status(500).json({ error: "Failed to update step: " + err.message });
     }
 }
 
-// 5. GET SHIPMENTS FOR TRANSPORTER
+// 6. TRANSPORTER ASSIGNED SHIPMENTS (Safe Filter & Casing)
 export async function getTransporterShipments(req, res) {
-    const transporterID = Number(req.params.transporterID);
-    if (!req.session.userId || transporterID !== Number(req.session.userId)) {
-        return res.status(401).json({ Error: "Unauthorized" });
+    const sessionUserId = req.session?.userId;
+    const transporterID = Number(sessionUserId || req.params.transporterID);
+
+    if (!sessionUserId) {
+        return res.status(401).json({ error: "Unauthorized: Active driver session not found." });
     }
 
     try {
+        const { data: driverData } = await db.from('users')
+            .select('username, location_coords')
+            .eq('userID', transporterID)
+            .single();
+
+        // Safe fetch query checking both possible casing forms
         const { data, error } = await db.from('shipments')
             .select('*')
             .eq('transporter_id', transporterID)
+            .or('displaytotransporter.is.null,displaytotransporter.eq.true,displayToTransporter.is.null,displayToTransporter.eq.true')
             .order('id', { ascending: false });
 
-        if (error) throw error;
-        res.status(200).json(data || []);
+        if (error) {
+            console.warn("[SUPABASE DRIVER QUERY RECOVER]: Fallback basic select applied.");
+            const fallback = await db.from('shipments')
+                .select('*')
+                .eq('transporter_id', transporterID)
+                .order('id', { ascending: false });
+
+            return res.status(200).json({
+                driver_base: driverData?.location_coords || null,
+                runs: fallback.data || []
+            });
+        }
+
+        return res.status(200).json({
+            driver_base: driverData?.location_coords || null,
+            runs: data || []
+        });
     } catch (err) {
-        res.status(500).json({ error: "Could not fetch assigned cargo runs." });
+        return res.status(500).json({ error: "Could not fetch assigned shipments: " + err.message });
     }
 }
 
-// 6. GET ALL SHIPMENTS & INVENTORY MATRIX
+// 7. WAREHOUSE REJECT / CANCEL SHIPMENT
+export async function cancelWarehouseShipment(req, res) {
+    const sessionUserId = req.session?.userId;
+    const warehouseID = Number(sessionUserId || req.params.userID);
+    const { shipmentID, reason } = req.body;
+
+    if (!sessionUserId) {
+        return res.status(401).json({ error: "Unauthorized: Active session not found." });
+    }
+
+    try {
+        const { data: shipment, error: sErr } = await db.from('shipments')
+            .select('*')
+            .eq('id', Number(shipmentID))
+            .single();
+
+        if (sErr || !shipment) {
+            return res.status(404).json({ error: "Shipment record not found." });
+        }
+
+        if (Number(shipment.sourceID) !== warehouseID) {
+            return res.status(403).json({ error: "Only the origin warehouse can cancel this order." });
+        }
+
+        if (shipment.status === 'Delivered') {
+            return res.status(400).json({ error: "Cannot cancel a delivered shipment." });
+        }
+
+        // If inventory was already deducted, restore physical stock
+        if (shipment.accepted_by_origin) {
+            const { data: inv } = await db.from('inventory')
+                .select('*')
+                .eq('warehouseID', warehouseID)
+                .eq('product_name', shipment.product_name)
+                .single();
+
+            if (inv) {
+                const restoredStock = inv.current_stock + shipment.quantity;
+                await db.from('inventory').update({
+                    current_stock: restoredStock,
+                    restocking_needed: restoredStock <= inv.min_threshold
+                }).eq('id', inv.id);
+            }
+        }
+
+        const rejectionNote = reason ? `Rejected by Warehouse: ${reason}` : "Cancelled by Origin Warehouse";
+
+        await db.from('shipments').update({
+            status: 'Cancelled by Warehouse',
+            risk: 'High',
+            ai_action: rejectionNote,
+            transit_step: 0
+        }).eq('id', Number(shipmentID));
+
+        return res.status(200).json({ Success: "Shipment cancelled. Stock rolled back if previously reserved." });
+    } catch (err) {
+        return res.status(500).json({ error: "Failed to cancel shipment: " + err.message });
+    }
+}
+
+// 8. TRANSPORTER EMERGENCY INCIDENT / ABORT
+export async function cancelTransporterShipment(req, res) {
+    const sessionUserId = req.session?.userId;
+    const transporterID = Number(sessionUserId || req.params.transporterID);
+    const { shipmentID, incident_reason } = req.body;
+
+    if (!sessionUserId) {
+        return res.status(401).json({ error: "Unauthorized: Driver session mismatch." });
+    }
+
+    try {
+        const { data: shipment, error: sErr } = await db.from('shipments')
+            .select('*')
+            .eq('id', Number(shipmentID))
+            .single();
+
+        if (sErr || !shipment) {
+            return res.status(404).json({ error: "Assigned cargo run not found." });
+        }
+
+        if (shipment.transporter_id && Number(shipment.transporter_id) !== transporterID) {
+            return res.status(403).json({ error: "Unauthorized access to this manifest." });
+        }
+
+        if (shipment.status === 'Delivered') {
+            return res.status(400).json({ error: "Cannot abort a delivered shipment." });
+        }
+
+        const reason = incident_reason || "Critical Transit Breakdown / Accident Reported";
+
+        await db.from('shipments').update({
+            status: 'Transit Aborted / Emergency',
+            risk: 'High',
+            ai_action: `CRITICAL: ${reason}. Manual fleet intervention required.`
+        }).eq('id', Number(shipmentID));
+
+        return res.status(200).json({ Success: "Emergency transit abort broadcasted to all monitors." });
+    } catch (err) {
+        return res.status(500).json({ error: "Failed to log transit emergency: " + err.message });
+    }
+}
+
+// 9. CLEAR TRANSPORTER RECORD (Soft Delete for Transporter)
+export async function clearTransporterShipment(req, res) {
+    const sessionUserId = req.session?.userId;
+    const transporterID = Number(sessionUserId || req.params.transporterID);
+    const { id } = req.params;
+
+    if (!sessionUserId) {
+        return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    try {
+        await db.from('shipments').update({
+            displaytotransporter: false,
+            displayToTransporter: false
+        }).eq('id', Number(id));
+
+        return res.status(200).json({ Success: "Run cleared from driver view." });
+    } catch (err) {
+        return res.status(500).json({ error: "Failed to clear record: " + err.message });
+    }
+}
+
+// 10. GENERAL QUERY & INVENTORY ENDPOINTS
 export async function getGlobalInventoryMatrix(req, res) {
     try {
         const { data: warehouses } = await db.from('users').select('userID, username').eq('role', 'warehouse');
         const { data: inventory } = await db.from('inventory').select('*');
-        res.status(200).json({ warehouses: warehouses || [], inventory: inventory || [] });
+        return res.status(200).json({ warehouses: warehouses || [], inventory: inventory || [] });
     } catch (err) {
-        res.status(500).json({ Error: "Matrix link decoupled." });
+        return res.status(500).json({ Error: "Matrix link decoupled." });
     }
 }
 
 export async function allShipments(req, res) {
     try {
         const { data } = await db.from('shipments').select('*');
-        res.status(200).json(data || []);
+        return res.status(200).json(data || []);
     } catch (err) {
-        res.status(500).json({ Error: "Fetch failed." });
+        return res.status(500).json({ Error: "Fetch failed." });
     }
 }
 
@@ -391,14 +671,14 @@ export async function getShipment(req, res) {
         const { data } = await db.from('shipments')
             .select('*')
             .or(`and(sourceID.eq.${userID},displayToSource.eq.true),and(userID.eq.${userID},displayToDest.eq.true)`);
-        
+
         const results = (data || []).reduce((acc, item) => {
             acc[item.id] = item;
             return acc;
         }, {});
-        res.status(200).json(results);
+        return res.status(200).json(results);
     } catch (err) {
-        res.status(500).json({ Error: "Feed retrieval error." });
+        return res.status(500).json({ Error: "Feed retrieval error." });
     }
 }
 
@@ -406,9 +686,9 @@ export async function getInventory(req, res) {
     const warehouseID = Number(req.params.userID);
     try {
         const { data } = await db.from('inventory').select('*').eq('warehouseID', warehouseID);
-        res.status(200).json(data || []);
+        return res.status(200).json(data || []);
     } catch (err) {
-        res.status(500).json({ Error: "Inventory fetch failed." });
+        return res.status(500).json({ Error: "Inventory fetch failed." });
     }
 }
 
@@ -439,24 +719,34 @@ export async function updateInventory(req, res) {
                 restocking_needed: totalStock <= (Number(min_threshold) || existing.min_threshold)
             }).eq('id', existing.id);
         }
-        res.status(200).json({ Success: "Inventory updated." });
+        return res.status(200).json({ Success: "Inventory updated." });
     } catch (err) {
-        res.status(500).json({ Error: "Inventory augmentation failure." });
+        return res.status(500).json({ Error: "Inventory augmentation failure." });
     }
 }
 
 export async function updateShipment(req, res) {
+    const sessionUserId = req.session?.userId;
+    const userID = Number(req.params.userID || sessionUserId);
+    if (!sessionUserId || userID !== Number(sessionUserId)) {
+        return res.status(401).json({ Error: "Please login first!" });
+    }
+
     const { id, status } = req.body;
+    if (!id || !status) {
+        return res.status(400).json({ error: "Please enter all details to update shipment." });
+    }
+
     try {
         await db.from('shipments').update({ status }).eq('id', id);
-        res.status(200).json({ Success: "Status updated." });
+        return res.status(200).json({ Success: "Status updated." });
     } catch (err) {
-        res.status(500).json({ Error: "Update failed." });
+        return res.status(500).json({ Error: "Update failed." });
     }
 }
 
 export async function clearShipment(req, res) {
-    const userID = Number(req.params.userID);
+    const userID = Number(req.params.userID || req.session?.userId);
     const { id } = req.params;
     try {
         const { data: shipment } = await db.from('shipments').select('*').eq('id', id).single();
@@ -465,10 +755,71 @@ export async function clearShipment(req, res) {
         let updateData = {};
         if (shipment.sourceID === userID) updateData = { displayToSource: false };
         else if (shipment.userID === userID) updateData = { displayToDest: false };
-        
+
         await db.from('shipments').update(updateData).eq('id', id);
-        res.status(200).json({ Success: "Cleared." });
+        return res.status(200).json({ Success: "Cleared." });
     } catch (err) {
-        res.status(500).json({ Error: "Failed to clear." });
+        return res.status(500).json({ Error: "Failed to clear." });
+    }
+}
+
+export async function finalizeDeliveryAndPurge(req, res) {
+    const sessionUserId = req.session?.userId;
+    const transporterID = Number(sessionUserId || req.params.transporterID);
+    const { shipmentID } = req.body;
+
+    if (!sessionUserId) {
+        return res.status(401).json({ error: "Unauthorized: Active driver session not found." });
+    }
+
+    try {
+        const { data: shipment, error: sErr } = await db.from('shipments')
+            .select('*')
+            .eq('id', Number(shipmentID))
+            .single();
+
+        if (sErr || !shipment) return res.status(404).json({ error: "Shipment record not found." });
+
+        if (shipment.transporter_id && Number(shipment.transporter_id) !== transporterID) {
+            return res.status(403).json({ error: "Unauthorized: You are not assigned to this delivery." });
+        }
+
+        // Restock destination inventory on confirmed W2W delivery
+        if (shipment.shipment_type === 'W2W') {
+            const destWarehouseID = Number(shipment.userID);
+
+            const { data: destInv } = await db.from('inventory')
+                .select('*')
+                .eq('warehouseID', destWarehouseID)
+                .eq('product_name', shipment.product_name)
+                .single();
+
+            if (destInv) {
+                const updatedStock = destInv.current_stock + shipment.quantity;
+                await db.from('inventory').update({
+                    current_stock: updatedStock,
+                    restocking_needed: updatedStock <= destInv.min_threshold
+                }).eq('id', destInv.id);
+            } else {
+                // If product catalog entry does not exist at target warehouse, create it
+                await db.from('inventory').insert({
+                    warehouseID: destWarehouseID,
+                    product_name: shipment.product_name,
+                    current_stock: shipment.quantity,
+                    min_threshold: 10,
+                    category: 'General',
+                    restocking_needed: false
+                });
+            }
+        }
+
+        // Purge completed shipment from database
+        await db.from('shipments').delete().eq('id', Number(shipmentID));
+
+        return res.status(200).json({ 
+            Success: "Shipment delivered. Destination inventory restocked and record cleared." 
+        });
+    } catch (err) {
+        return res.status(500).json({ error: "Failed to finalize delivery: " + err.message });
     }
 }

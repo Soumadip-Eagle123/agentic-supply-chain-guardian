@@ -64,7 +64,7 @@ export default function UpdateShipment({ params }: { params: Promise<{ userID: s
       <form onSubmit={handleUpdate} className="bg-slate-900 border border-slate-800 rounded-2xl p-8 space-y-6">
         <div>
           <label className="text-[10px] font-mono text-slate-500 uppercase mb-3 block tracking-widest">
-            Update Status Vector
+            Update Shipment Status
           </label>
           <select 
             required
@@ -103,7 +103,7 @@ export default function UpdateShipment({ params }: { params: Promise<{ userID: s
 
       <div className="p-4 bg-slate-900/50 border border-slate-800 rounded-xl">
         <p className="text-[10px] text-slate-500 leading-relaxed uppercase font-mono tracking-tight">
-          <span className="text-blue-500 font-bold">Note:</span> Changing the status triggers an automatic re-analysis by the Llama 3 Agent[cite: 5316, 11036]. This may update the Risk Level and Recommended AI Action in your Intelligence Feed[cite: 5317, 11037].
+          <span className="text-blue-500 font-bold">Note:</span> Updating delivery progress automatically notifies the receiving facility and recalculates estimated arrival safety.
         </p>
       </div>
     </div>

@@ -9,8 +9,11 @@ import {
     logoutTransporter, 
     getWarehouses 
 } from '../controllers/authController.js';
+import { getMe } from '../controllers/authController.js';
 
 export const authRouter = express.Router();
+
+authRouter.get('/me', getMe);
 
 authRouter.post('/signup/user', signup);
 authRouter.post('/signup/warehouse', signup);

@@ -106,6 +106,22 @@ async function performLogout(req, res) {
     await db.from('users').update({ loggedIn: 0 }).eq('"userID"', req.session.userId);
     req.session.destroy(() => res.json({ message: 'Logged out' }));
 }
+export async function getMe(req, res) {
+    if (!req.session?.userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+    }
+    try {
+        const { data: user, error } = await db.from('users')
+            .select('userID, username, role, location_coords')
+            .eq('userID', req.session.userId)
+            .single();
+
+        if (error || !user) return res.status(404).json({ error: "User not found" });
+        return res.status(200).json(user);
+    } catch (err) {
+        return res.status(500).json({ error: "Failed to fetch session user" });
+    }
+}
 
 export const logoutUser = performLogout;
 export const logoutWarehouse = performLogout;

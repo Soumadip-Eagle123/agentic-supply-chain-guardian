@@ -9,7 +9,7 @@ const GlobalMap = dynamic(() => import('@/app/components/Map/MapContainer'), {
     <div className="h-150 w-full bg-slate-900 animate-pulse rounded-2xl flex items-center justify-center">
       <div className="text-center">
         <Loader2 className="animate-spin text-blue-500 mx-auto mb-2" size={40} />
-        <p className="font-mono text-xs text-slate-500 uppercase tracking-widest">Booting Satellite Uplink...</p>
+        <p className="font-mono text-xs text-slate-500 uppercase tracking-widest">Loading live map...</p>
       </div>
     </div>
   )
@@ -54,7 +54,7 @@ export default function TrackingPortal({ params }: { params: Promise<{ userID: s
       <div className="flex justify-between items-center border-b border-slate-800 pb-4">
         <div>
           <h2 className="text-2xl font-bold text-white">Global Logistics View</h2>
-          <p className="text-slate-500 text-sm">Visualizing active transit vectors across the network.</p>
+          <p className="text-slate-500 text-sm">Live map view of moving delivery drivers and warehouse locations.</p>
         </div>
         <div className="flex items-center gap-4 text-[10px] font-mono">
           <div className="flex items-center gap-2">
@@ -80,7 +80,7 @@ export default function TrackingPortal({ params }: { params: Promise<{ userID: s
         {shipments.length === 0 && !isLoading && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                 <p className="text-slate-500 font-mono text-xs uppercase tracking-widest bg-slate-950/80 px-4 py-2 rounded-full border border-slate-800">
-                    No active transit vectors detected in this sector.
+                    No active deliveries currently in transit.
                 </p>
             </div>
         )}
