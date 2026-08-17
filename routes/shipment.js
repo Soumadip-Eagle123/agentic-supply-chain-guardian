@@ -16,7 +16,8 @@ import {
     cancelTransporterShipment,
     clearTransporterShipment,
     confirmPickup,
-    finalizeDeliveryAndPurge
+    finalizeDeliveryAndPurge,
+    updateTransporterManualStatus
 } from '../controllers/shipmentController.js';
 
 export const shipmentRouter = express.Router({ mergeParams: true });
@@ -41,6 +42,8 @@ inventoryRouter.get('/stock', getInventory);
 
 transporterRouter.get('/runs', getTransporterShipments);
 transporterRouter.post('/update-step', updateTransitStep);
+transporterRouter.post('/manual-update', updateTransporterManualStatus);
+transporterRouter.post('/pickup', confirmPickup);
 transporterRouter.post('/confirm-pickup', confirmPickup);
 transporterRouter.delete('/clear/:id', clearTransporterShipment);
 transporterRouter.post('/abort-transit', cancelTransporterShipment);

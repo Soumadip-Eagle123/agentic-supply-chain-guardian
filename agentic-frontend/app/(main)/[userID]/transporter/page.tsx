@@ -5,23 +5,21 @@ import dynamic from 'next/dynamic';
 import {
   Truck,
   Navigation,
-  AlertTriangle,
   CheckCircle,
   ArrowRight,
-  ShieldAlert,
-  ShieldCheck,
-  ShieldMinus,
   X,
   Loader2,
   PackageCheck,
   MapPin,
-  CheckCircle2
+  CheckCircle2,
+  MessageSquare,
+  ClipboardList
 } from 'lucide-react';
 
 const DynamicMap = dynamic(() => import('@/app/components/Map/LiveTransporterMap'), {
   ssr: false,
   loading: () => (
-    <div className="h-72 bg-slate-950 rounded-2xl flex items-center justify-center text-slate-500 text-xs">
+    <div className="h-72 bg-slate-950 rounded-2xl flex items-center justify-center text-slate-500 text-xs font-mono">
       Loading Live Route Map...
     </div>
   )
@@ -34,7 +32,7 @@ export default function TransporterPortal({ params }: { params: Promise<{ userID
   const [loading, setLoading] = useState(true);
   const [selectedRun, setSelectedRun] = useState<any | null>(null);
   const [step, setStep] = useState<number>(0);
-  const [hazard, setHazard] = useState<string>('');
+  const [driverComment, setDriverComment] = useState<string>('');
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [statusMsg, setStatusMsg] = useState<string>('');
 
@@ -77,7 +75,7 @@ export default function TransporterPortal({ params }: { params: Promise<{ userID
     if (!selectedRun) return;
     setIsProcessing(true);
     try {
-      const res = await fetch(`${API}/api/transporter/${userID}/confirm-pickup`, {
+      const res = await fetch(`${API}/api/transporter/${userID}/pickup`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -94,29 +92,31 @@ export default function TransporterPortal({ params }: { params: Promise<{ userID
     }
   };
 
-  // Button 2: Update Checkpoint (Keeps in DB even if 10/10)
+  // Checkpoint & Driver Comment Update (Fast path without AI latency)
   const handleStepSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedRun) return;
 
     setIsProcessing(true);
     try {
-      const res = await fetch(`${API}/api/transporter/${userID}/update-step`, {
+      const res = await fetch(`${API}/api/transporter/${userID}/manual-update`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
           shipmentID: selectedRun.id,
           step: step,
-          hazard_report: hazard || undefined
+          driver_note: driverComment || undefined
         })
       });
 
       const data = await res.json();
       if (res.ok) {
-        setStatusMsg(data.Success || `Checkpoint ${step}/10 logged.`);
-        setHazard('');
+        setStatusMsg(data.Success || `Checkpoint ${step}/10 updated.`);
+        setDriverComment('');
         await fetchRuns();
+      } else {
+        setStatusMsg(data.error || 'Failed to update checkpoint.');
       }
     } catch (err) {
       setStatusMsg('Connection error logging progress.');
@@ -125,10 +125,10 @@ export default function TransporterPortal({ params }: { params: Promise<{ userID
     }
   };
 
-  // Button 3: Finalize Delivery & Hard Delete from DB
+  // Finalize Delivery & Restock Destination Warehouse
   const handleFinalizeAndPurge = async () => {
     if (!selectedRun) return;
-    if (!confirm(`Confirm delivery and purge shipment #${selectedRun.id} from database?`)) return;
+    if (!confirm(`Confirm delivery and finalize shipment #${selectedRun.id}?`)) return;
 
     setIsProcessing(true);
     try {
@@ -140,7 +140,7 @@ export default function TransporterPortal({ params }: { params: Promise<{ userID
       });
 
       if (res.ok) {
-        setStatusMsg('Shipment finalized and purged from database.');
+        setStatusMsg('Shipment delivery confirmed and finalized.');
         setSelectedRun(null);
         await fetchRuns();
       }
@@ -151,7 +151,7 @@ export default function TransporterPortal({ params }: { params: Promise<{ userID
     }
   };
 
-  // Button 1: "X" Soft Clear from Driver Console
+  // Soft Clear from Transporter View
   const handleClearRun = async (shipmentID: number, e: React.MouseEvent) => {
     e.stopPropagation();
     try {
@@ -168,31 +168,30 @@ export default function TransporterPortal({ params }: { params: Promise<{ userID
     }
   };
 
-  const isHighRisk = selectedRun?.risk?.toLowerCase() === 'high';
-  const isMediumRisk = selectedRun?.risk?.toLowerCase() === 'medium';
-
   return (
     <div className="max-w-6xl mx-auto space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between border-b border-slate-800 pb-4">
         <div>
           <h1 className="text-xl font-bold text-white flex items-center gap-2">
-            <Truck className="text-blue-500" size={24} /> Driver Delivery Hub
+            <Truck className="text-blue-500" size={24} /> Driver Delivery Cockpit
           </h1>
-          <p className="text-slate-400 text-xs mt-0.5">Manage route checkpoints, pickup status, and active delivery manifests.</p>
+          <p className="text-slate-400 text-xs mt-0.5">
+            Manage route progress, confirm collections, and provide live transit updates.
+          </p>
         </div>
         <button
           onClick={fetchRuns}
           className="text-xs bg-slate-900 border border-slate-800 hover:border-slate-700 px-3.5 py-2 rounded-xl text-slate-300 transition-all font-medium"
         >
-          Refresh Routes
+          Refresh Manifest
         </button>
       </div>
 
       {loading ? (
         <div className="flex flex-col items-center justify-center py-20 text-slate-600 gap-2">
           <Loader2 className="animate-spin text-blue-500" size={28} />
-          <span className="text-xs">Loading delivery schedule...</span>
+          <span className="text-xs font-mono">Syncing manifest data...</span>
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -207,7 +206,9 @@ export default function TransporterPortal({ params }: { params: Promise<{ userID
               <div className="p-8 text-center border border-dashed border-slate-800 rounded-2xl bg-slate-900/20 space-y-2">
                 <Truck size={28} className="text-slate-700 mx-auto" />
                 <p className="text-slate-300 font-bold text-xs">No Deliveries Currently Assigned</p>
-                <p className="text-slate-500 text-[11px]">When a warehouse dispatches an order near your base, it will appear here.</p>
+                <p className="text-slate-500 text-[11px]">
+                  When a warehouse confirms a dispatch, it will appear here.
+                </p>
               </div>
             ) : (
               <div className="space-y-2.5 max-h-155 overflow-y-auto pr-1">
@@ -225,23 +226,19 @@ export default function TransporterPortal({ params }: { params: Promise<{ userID
                           : 'border-slate-800 bg-slate-900/40 text-slate-400 hover:border-slate-700'
                       }`}
                     >
-                      {/* BUTTON 1: "X" Button for Soft Clearance */}
+                      {/* Soft Clear Button */}
                       <button
                         onClick={(e) => handleClearRun(r.id, e)}
                         className="absolute top-3.5 right-3 p-1 rounded-lg bg-slate-950/60 text-slate-400 hover:text-white hover:bg-red-500/20 transition-all"
-                        title="Soft clear from driver view"
+                        title="Dismiss run from view"
                       >
                         <X size={14} />
                       </button>
 
                       <div className="flex justify-between items-start mb-1 pr-6">
                         <span className="font-bold text-sm text-white truncate">{r.product_name}</span>
-                        <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase ${
-                          r.risk?.toLowerCase() === 'high' ? 'bg-red-500/20 text-red-400' :
-                          r.risk?.toLowerCase() === 'medium' ? 'bg-orange-500/20 text-orange-400' :
-                          'bg-emerald-500/20 text-emerald-400'
-                        }`}>
-                          {r.risk || 'Low'} Risk
+                        <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300 uppercase">
+                          {r.shipment_type || 'W2B'}
                         </span>
                       </div>
 
@@ -269,29 +266,25 @@ export default function TransporterPortal({ params }: { params: Promise<{ userID
                 driverBaseCoords={driverBase}
                 transitStep={selectedRun?.transit_step || 0}
                 isPickedUp={selectedRun?.is_picked_up || false}
-                label={selectedRun ? `${selectedRun.product_name} (${selectedRun.quantity} Units)` : "Transporter Base Depot"}
-                status={selectedRun?.status || "Idle at Base"}
+                label={selectedRun ? `${selectedRun.product_name} (${selectedRun.quantity} Units)` : "Transporter Depot"}
+                status={selectedRun?.status || "Idle"}
               />
             </div>
 
             {selectedRun && (
               <>
-                {/* Risk Directive Banner */}
-                <div className={`p-4 rounded-2xl border transition-all ${
-                  isHighRisk ? 'border-red-500/50 bg-red-950/20 text-red-300' :
-                  isMediumRisk ? 'border-orange-500/50 bg-orange-950/20 text-orange-300' :
-                  'border-emerald-500/50 bg-emerald-950/20 text-emerald-300'
-                }`}>
+                {/* Transit Note & Operational Instructions Banner */}
+                <div className="p-4 rounded-2xl border border-slate-800 bg-slate-900/60 text-slate-300">
                   <div className="flex items-start gap-3">
-                    <div className="p-2 rounded-xl bg-slate-900 shrink-0 mt-0.5">
-                      {isHighRisk ? <ShieldAlert size={20} className="text-red-400" /> :
-                       isMediumRisk ? <ShieldMinus size={20} className="text-orange-400" /> :
-                       <ShieldCheck size={20} className="text-emerald-400" />}
+                    <div className="p-2 rounded-xl bg-slate-950 shrink-0 mt-0.5 border border-slate-800 text-blue-400">
+                      <ClipboardList size={18} />
                     </div>
                     <div className="space-y-1">
-                      <p className="text-xs font-bold uppercase tracking-wide">Route Safety Directive</p>
-                      <p className="text-xs leading-relaxed text-slate-200">
-                        {selectedRun.ai_action || "Route clear. Proceed with standard transit parameters."}
+                      <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
+                        Operational Status & Dispatch Notes
+                      </p>
+                      <p className="text-xs leading-relaxed text-slate-200 font-mono">
+                        {selectedRun.ai_action || selectedRun.status || "Package ready for transit. Follow designated corridor parameters."}
                       </p>
                     </div>
                   </div>
@@ -301,7 +294,9 @@ export default function TransporterPortal({ params }: { params: Promise<{ userID
                 <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-6 space-y-5">
                   <div className="flex justify-between items-start border-b border-slate-800 pb-3">
                     <div>
-                      <h3 className="text-base font-bold text-white">{selectedRun.product_name} ({selectedRun.quantity} Units)</h3>
+                      <h3 className="text-base font-bold text-white">
+                        {selectedRun.product_name} ({selectedRun.quantity} Units)
+                      </h3>
                       <p className="text-xs text-slate-400 flex items-center gap-1.5 mt-0.5">
                         <MapPin size={12} className="text-blue-400" /> {selectedRun.source} ➔ {selectedRun.destination}
                       </p>
@@ -311,7 +306,9 @@ export default function TransporterPortal({ params }: { params: Promise<{ userID
                   {!selectedRun.is_picked_up ? (
                     <div className="bg-blue-950/20 border border-blue-500/30 p-5 rounded-xl space-y-3 text-center">
                       <p className="text-xs font-bold text-blue-300 uppercase">Package Awaiting Warehouse Pickup</p>
-                      <p className="text-xs text-slate-400">Arrive at {selectedRun.source} and click below to confirm collection.</p>
+                      <p className="text-xs text-slate-400">
+                        Arrive at {selectedRun.source} and click below to confirm physical collection.
+                      </p>
                       <button
                         onClick={handleConfirmPickup}
                         disabled={isProcessing}
@@ -330,7 +327,7 @@ export default function TransporterPortal({ params }: { params: Promise<{ userID
                             Delivery Progress: <b className="text-blue-400 text-sm">{step}/10 ({step * 10}%)</b>
                           </span>
                           <span className="text-slate-400 bg-slate-900 px-2 py-0.5 rounded border border-slate-800 text-[11px]">
-                            {step === 10 ? 'Delivered' : step === 0 ? 'Picked Up at Origin' : `En Route Checkpoint ${step}`}
+                            {step === 10 ? 'Arrived at Destination' : step === 0 ? 'Picked Up at Origin' : `En Route Checkpoint ${step}`}
                           </span>
                         </div>
 
@@ -352,38 +349,39 @@ export default function TransporterPortal({ params }: { params: Promise<{ userID
                         </div>
                       </div>
 
+                      {/* Driver Comments & Notes Field */}
                       <div className="space-y-1.5">
                         <label className="text-xs font-bold text-slate-400 flex items-center gap-1.5">
-                          <AlertTriangle size={14} className="text-amber-500" />
-                          Report Road Condition / Incident Delay (Optional)
+                          <MessageSquare size={14} className="text-blue-400" />
+                          Driver Remarks / Status Comment (Optional)
                         </label>
                         <input
                           type="text"
-                          placeholder="e.g. Flooded highway on NH-44 / Flat tire delay"
-                          value={hazard}
-                          onChange={(e) => setHazard(e.target.value)}
-                          className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white focus:border-blue-500 outline-none"
+                          placeholder="e.g., Passing toll plaza / slight traffic delay / reached halfway mark"
+                          value={driverComment}
+                          onChange={(e) => setDriverComment(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white focus:border-blue-500 outline-none font-mono"
                         />
                       </div>
 
                       {statusMsg && (
-                        <div className="p-3 bg-blue-500/10 border border-blue-500/20 text-blue-300 rounded-lg text-xs flex items-center gap-2">
+                        <div className="p-3 bg-blue-500/10 border border-blue-500/20 text-blue-300 rounded-lg text-xs flex items-center gap-2 font-mono">
                           <CheckCircle size={14} /> {statusMsg}
                         </div>
                       )}
 
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
-                        {/* BUTTON 2: Update Checkpoint (Keeps in DB) */}
+                        {/* Fast Checkpoint Update */}
                         <button
                           type="submit"
                           disabled={isProcessing}
                           className="w-full py-3.5 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition-all shadow-lg disabled:opacity-50"
                         >
                           {isProcessing ? <Loader2 size={16} className="animate-spin" /> : <ArrowRight size={16} />}
-                          UPDATE CHECKPOINT
+                          UPDATE PROGRESS & REMARKS
                         </button>
 
-                        {/* BUTTON 3: Finalize Delivery & Hard Delete from DB */}
+                        {/* Finalize Delivery */}
                         <button
                           type="button"
                           onClick={handleFinalizeAndPurge}
@@ -391,7 +389,7 @@ export default function TransporterPortal({ params }: { params: Promise<{ userID
                           className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition-all shadow-[0_0_15px_rgba(16,185,129,0.3)] disabled:opacity-50"
                         >
                           {isProcessing ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
-                          CONFIRM DELIVERY & FINALIZE
+                          CONFIRM DELIVERY & COMPLETE
                         </button>
                       </div>
                     </form>
