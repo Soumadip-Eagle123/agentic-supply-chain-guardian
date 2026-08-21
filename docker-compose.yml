@@ -1,5 +1,3 @@
-version: '3.9'
-
 services:
   app:
     build: .
@@ -20,8 +18,10 @@ services:
     volumes:
       - ./ai-service:/app
       - ./ai-service/data:/app/data
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    env_file:
+      - .env
+    environment:
+      - GROQ_API_KEY=${GROQ_API_KEY}
 
   frontend:
     build: ./agentic-frontend
