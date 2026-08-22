@@ -21,7 +21,7 @@ function calculateDistanceKm(coords1, coords2) {
     return R * c;
 }
 
-// Find closest available transporter relative to origin warehouse
+// Find closest available transporter relative to the origin warehouse
 async function findClosestTransporter(warehouseCoords) {
     try {
         const { data: transporters, error } = await db
@@ -69,115 +69,6 @@ async function getUserData(userID) {
         .single();
     if (error || !data) return null;
     return data;
-}
-
-// Helper: Restock destination warehouse on W2W completion
-async function restockDestinationWarehouse(destWarehouseID, productName, quantity) {
-    console.log(`[RESTOCK TRIGGER]: Crediting ${quantity} units of ${productName} to Destination Hub #${destWarehouseID}...`);
-    try {
-        const { data: destInv } = await db.from('inventory')
-            .select('*')
-            .eq('warehouseID', destWarehouseID)
-            .eq('product_name', productName)
-            .single();
-
-        if (destInv) {
-            const updatedStock = destInv.current_stock + quantity;
-            await db.from('inventory').update({
-                current_stock: updatedStock,
-                restocking_needed: updatedStock <= destInv.min_threshold
-            }).eq('id', destInv.id);
-            console.log(`[RESTOCK SUCCESS]: Hub #${destWarehouseID} ${productName} updated: ${destInv.current_stock} -> ${updatedStock}`);
-        } else {
-            await db.from('inventory').insert({
-                warehouseID: destWarehouseID,
-                product_name: productName,
-                current_stock: quantity,
-                min_threshold: 10,
-                category: 'General',
-                restocking_needed: false
-            });
-            console.log(`[RESTOCK SUCCESS]: Hub #${destWarehouseID} ${productName} created with ${quantity} units.`);
-        }
-    } catch (e) {
-        console.error("[RESTOCK ERROR]:", e.message);
-    }
-}
-
-// Helper: Trigger autonomous W2W rebalance if threshold breached
-async function evaluateAndTriggerW2WRebalance(warehouseID, productName, minThreshold) {
-    console.log(`[REBALANCE EVAL]: Hub ${warehouseID} threshold breached for ${productName}. Querying surplus nodes...`);
-    try {
-        const { data: invItems, error: invQueryErr } = await db.from('inventory')
-            .select('warehouseID, current_stock, min_threshold')
-            .eq('product_name', productName)
-            .neq('warehouseID', warehouseID)
-            .not('warehouseID', 'is', null);
-
-        if (invQueryErr || !invItems || invItems.length === 0) {
-            console.log("[REBALANCE]: No external warehouse nodes found for restock.");
-            return;
-        }
-
-        const warehouseIDs = invItems.map(i => i.warehouseID);
-        const { data: userDetails } = await db.from('users')
-            .select('userID, username, location_coords')
-            .in('userID', warehouseIDs);
-
-        const cleanContext = invItems.map(item => {
-            const detail = userDetails?.find(u => u.userID === item.warehouseID);
-            if (!detail) return null;
-            return {
-                warehouse_id: item.warehouseID,
-                stock: item.current_stock,
-                threshold: item.min_threshold,
-                name: detail.username,
-                coords: detail.location_coords
-            };
-        }).filter(Boolean);
-
-        if (cleanContext.length === 0) return;
-
-        const agentRes = await axios.post('http://ai-service:8000/rebalance', {
-            product_name: productName,
-            deficit_warehouse_id: warehouseID,
-            inventory_context: cleanContext,
-            constant_restock_qty: minThreshold * 2
-        });
-
-        const decision = agentRes?.data;
-        if (decision?.status === 'EXECUTE' && decision?.source_id) {
-            const sourceWH = await getUserData(decision.source_id);
-            const destWH = await getUserData(warehouseID);
-            const assignedDriver = await findClosestTransporter(sourceWH?.location_coords);
-
-            await db.from('shipments').insert({
-                sourceID: decision.source_id,
-                userID: warehouseID,
-                product_name: productName,
-                quantity: decision.qty,
-                source: sourceWH?.username || `Hub #${decision.source_id}`,
-                destination: destWH?.username || `Hub #${warehouseID}`,
-                source_coords: sourceWH?.location_coords,
-                dest_coords: destWH?.location_coords,
-                shipment_type: 'W2W',
-                status: 'AI Rebalance Proposed - Awaiting Surplus Hub Approval',
-                risk: 'Low',
-                ai_action: `Autonomous Rebalance: Requesting ${decision.qty} units from ${sourceWH?.username}.`,
-                displayToSource: true,
-                displayToDest: true,
-                displaytotransporter: true,
-                transporter_id: assignedDriver ? assignedDriver.userID : null,
-                accepted_by_origin: false,
-                is_w2w_confirmed: false,
-                transit_step: 0,
-                is_picked_up: false
-            });
-            console.log(`[REBALANCE]: W2W proposal created from Hub ${decision.source_id} -> Hub ${warehouseID}`);
-        }
-    } catch (rebErr) {
-        console.error("[REBALANCE FAULT]:", rebErr.message);
-    }
 }
 
 // 1. ORDER PLACEMENT (B2W / W2B Request)
@@ -282,7 +173,7 @@ export async function postShipment(req, res) {
     }
 }
 
-// 2. ACCEPT / DISPATCH SHIPMENT (Origin Warehouse Approval - NO STOCK DEDUCTED HERE)
+// 2. ACCEPT / DISPATCH SHIPMENT
 export async function acceptShipmentOrder(req, res) {
     const sessionUserId = req.session?.userId;
     const warehouseID = Number(sessionUserId || req.params.userID);
@@ -304,26 +195,33 @@ export async function acceptShipmentOrder(req, res) {
         }
 
         if (Number(shipment.sourceID) !== Number(warehouseID)) {
-            return res.status(403).json({ error: `Only origin hub (Hub #${shipment.sourceID}) can accept this order.` });
+            return res.status(403).json({ error: `Only the origin hub (Hub #${shipment.sourceID}) can accept this order.` });
         }
 
         if (shipment.accepted_by_origin) {
-            return res.status(400).json({ error: "Shipment is already accepted and awaiting pickup." });
+            return res.status(400).json({ error: "Shipment is already accepted and in transit." });
         }
 
-        const { data: inv } = await db.from('inventory')
+        const { data: inv, error: invErr } = await db.from('inventory')
             .select('*')
             .eq('product_name', shipment.product_name)
             .eq('warehouseID', warehouseID)
             .single();
 
-        if (!inv || inv.current_stock < shipment.quantity) {
+        if (invErr || !inv || inv.current_stock < shipment.quantity) {
             return res.status(400).json({
                 error: `Insufficient stock in Warehouse #${warehouseID}. Available: ${inv ? inv.current_stock : 0}`
             });
         }
 
-        // Just mark accepted without deducting physical inventory
+        const newStock = inv.current_stock - shipment.quantity;
+        const needsRestock = newStock <= inv.min_threshold;
+
+        await db.from('inventory').update({
+            current_stock: newStock,
+            restocking_needed: needsRestock
+        }).eq('id', inv.id);
+
         await db.from('shipments').update({
             accepted_by_origin: true,
             status: 'Dispatched - Awaiting Driver Collection',
@@ -331,14 +229,83 @@ export async function acceptShipmentOrder(req, res) {
             is_picked_up: false
         }).eq('id', Number(shipmentID));
 
-        return res.status(200).json({ Success: "Order accepted. Shipment unlocked for transporter collection." });
+        // AUTONOMOUS W2W REBALANCING TRIGGER
+        if (needsRestock) {
+            console.log(`[REBALANCE] Hub ${warehouseID} threshold breached for ${shipment.product_name}. Querying surplus nodes...`);
+            try {
+                const { data: invItems, error: invQueryErr } = await db.from('inventory')
+                    .select('warehouseID, current_stock, min_threshold')
+                    .eq('product_name', shipment.product_name)
+                    .neq('warehouseID', warehouseID)
+                    .not('warehouseID', 'is', null);
+
+                if (!invQueryErr && invItems && invItems.length > 0) {
+                    const warehouseIDs = invItems.map(i => i.warehouseID);
+                    const { data: userDetails } = await db.from('users')
+                        .select('userID, username, location_coords')
+                        .in('userID', warehouseIDs);
+
+                    const cleanContext = invItems.map(item => {
+                        const detail = userDetails?.find(u => u.userID === item.warehouseID);
+                        if (!detail) return null;
+                        return {
+                            warehouse_id: item.warehouseID,
+                            stock: item.current_stock,
+                            threshold: item.min_threshold,
+                            name: detail.username,
+                            coords: detail.location_coords
+                        };
+                    }).filter(Boolean);
+
+                    if (cleanContext.length > 0) {
+                        const agentRes = await axios.post('http://ai-service:8000/rebalance', {
+                            product_name: shipment.product_name,
+                            deficit_warehouse_id: warehouseID,
+                            inventory_context: cleanContext,
+                            constant_restock_qty: inv.min_threshold * 2
+                        });
+
+                        const decision = agentRes?.data;
+                        if (decision?.status === 'EXECUTE' && decision?.source_id) {
+                            const sourceWH = await getUserData(decision.source_id);
+                            const destWH = await getUserData(warehouseID);
+
+                            await db.from('shipments').insert({
+                                sourceID: decision.source_id,
+                                userID: warehouseID,
+                                product_name: shipment.product_name,
+                                quantity: decision.qty,
+                                source: sourceWH?.username || `Hub #${decision.source_id}`,
+                                destination: destWH?.username || `Hub #${warehouseID}`,
+                                source_coords: sourceWH?.location_coords,
+                                dest_coords: destWH?.location_coords,
+                                shipment_type: 'W2W',
+                                status: 'AI Rebalance Proposed - Awaiting Surplus Hub Approval',
+                                risk: 'Low',
+                                ai_action: `Autonomous Rebalance: Requesting ${decision.qty} units from ${sourceWH?.username}.`,
+                                displayToSource: true,
+                                displayToDest: true,
+                                displaytotransporter: true,
+                                accepted_by_origin: false,
+                                is_w2w_confirmed: false,
+                                transit_step: 0
+                            });
+                        }
+                    }
+                }
+            } catch (rebErr) {
+                console.error("[REBALANCE FAULT]:", rebErr.message);
+            }
+        }
+
+        return res.status(200).json({ Success: "Order accepted. Cargo dispatched to assigned transporter." });
     } catch (err) {
         console.error("Acceptance failure:", err);
         return res.status(500).json({ error: "Failed to process acceptance: " + err.message });
     }
 }
 
-// 3. CONFIRM W2W REBALANCE (Surplus Warehouse Approval - NO STOCK DEDUCTED HERE)
+// 3. CONFIRM W2W REBALANCE
 export async function confirmW2WTransfer(req, res) {
     const sessionUserId = req.session?.userId;
     const sourceWarehouseID = Number(sessionUserId || req.params.userID);
@@ -374,25 +341,28 @@ export async function confirmW2WTransfer(req, res) {
             return res.status(400).json({ error: "Surplus stock no longer available." });
         }
 
-        const assignedDriver = await findClosestTransporter(shipment.source_coords);
+        const newStock = sourceInv.current_stock - shipment.quantity;
+        await db.from('inventory')
+            .update({ 
+                current_stock: newStock,
+                restocking_needed: newStock <= sourceInv.min_threshold
+            })
+            .eq('id', sourceInv.id);
 
         await db.from('shipments').update({
             accepted_by_origin: true,
             is_w2w_confirmed: true,
-            transporter_id: assignedDriver ? assignedDriver.userID : shipment.transporter_id,
-            status: 'Dispatched - Awaiting Driver Collection',
-            transit_step: 0,
-            is_picked_up: false,
-            displaytotransporter: true
+            status: 'In Transit (W2W Rebalance)',
+            transit_step: 1
         }).eq('id', Number(shipmentID));
 
-        return res.status(200).json({ Success: "W2W transfer approved. Unlocked for transporter collection." });
+        return res.status(200).json({ Success: "W2W rebalance confirmed. Stock dispatched." });
     } catch (err) {
         return res.status(500).json({ error: "W2W confirmation failed: " + err.message });
     }
 }
 
-// 4. CONFIRM PICKUP (STOCK IS DEDUCTED HERE & W2W REBALANCE TRIGGERED IF BREACHED)
+// 4. CONFIRM PICKUP
 export async function confirmPickup(req, res) {
     const sessionUserId = req.session?.userId;
     const transporterID = Number(sessionUserId || req.params.transporterID);
@@ -412,123 +382,23 @@ export async function confirmPickup(req, res) {
             return res.status(404).json({ error: "Assigned cargo run not found." });
         }
 
-        if (shipment.transporter_id && Number(shipment.transporter_id) !== transporterID) {
-            return res.status(403).json({ error: "This run is assigned to another transporter." });
+        if (!shipment.transporter_id || Number(shipment.transporter_id) !== transporterID) {
+            return res.status(403).json({ error: "This run is assigned to another transporter or unassigned." });
         }
-
-        if (shipment.is_picked_up) {
-            return res.status(400).json({ error: "Cargo is already marked as picked up." });
-        }
-
-        const originHubID = Number(shipment.sourceID);
-
-        const { data: originInv, error: invErr } = await db.from('inventory')
-            .select('*')
-            .eq('warehouseID', originHubID)
-            .eq('product_name', shipment.product_name)
-            .single();
-
-        if (invErr || !originInv || originInv.current_stock < shipment.quantity) {
-            return res.status(400).json({
-                error: `Pickup aborted: Insufficient stock at Origin Hub #${originHubID}.`
-            });
-        }
-
-        const updatedStock = originInv.current_stock - shipment.quantity;
-        const needsRestock = updatedStock <= originInv.min_threshold;
-
-        await db.from('inventory').update({
-            current_stock: updatedStock,
-            restocking_needed: needsRestock
-        }).eq('id', originInv.id);
 
         await db.from('shipments').update({
             is_picked_up: true,
-            transporter_id: transporterID,
             status: 'Cargo Picked Up — En Route',
             transit_step: 0
         }).eq('id', Number(shipmentID));
 
-        console.log(`[PICKUP DEDUCTION]: Deducted ${shipment.quantity} units from Hub #${originHubID}. Remaining: ${updatedStock}`);
-
-        if (shipment.shipment_type !== 'W2W' && needsRestock) {
-            evaluateAndTriggerW2WRebalance(originHubID, shipment.product_name, originInv.min_threshold);
-        }
-
-        return res.status(200).json({
-            Success: "Cargo pickup confirmed. Inventory deducted from origin warehouse.",
-            remaining_origin_stock: updatedStock
-        });
+        return res.status(200).json({ Success: "Cargo collection confirmed. Active delivery begun." });
     } catch (err) {
         return res.status(500).json({ error: "Failed to confirm pickup: " + err.message });
     }
 }
 
-// 5. MANUAL STEP UPDATE (Used by the frontend slider)
-export async function updateTransporterManualStatus(req, res) {
-    const sessionUserId = req.session?.userId;
-    const transporterID = Number(sessionUserId || req.params.transporterID);
-    const { shipmentID, step, status_text, driver_note } = req.body;
-
-    if (!sessionUserId) {
-        return res.status(401).json({ error: "Unauthorized: Active driver session not found." });
-    }
-
-    if (!shipmentID) {
-        return res.status(400).json({ error: "Shipment ID is required." });
-    }
-
-    try {
-        const { data: shipment, error: sErr } = await db.from('shipments')
-            .select('*')
-            .eq('id', Number(shipmentID))
-            .single();
-
-        if (sErr || !shipment) {
-            return res.status(404).json({ error: "Shipment manifest not found." });
-        }
-
-        if (shipment.transporter_id && Number(shipment.transporter_id) !== transporterID) {
-            return res.status(403).json({ error: "Unauthorized: You are not assigned to this cargo run." });
-        }
-
-        const stepNum = step !== undefined ? Number(step) : shipment.transit_step;
-        const updatePayload = { transit_step: stepNum };
-
-        if (status_text) {
-            updatePayload.status = status_text;
-        } else if (stepNum === 10) {
-            updatePayload.status = 'Delivered';
-        } else {
-            updatePayload.status = stepNum === 0 ? 'Cargo Picked Up — En Route' : `In Transit (Checkpoint ${stepNum}/10)`;
-        }
-
-        if (driver_note) {
-            updatePayload.ai_action = `Driver Update: ${driver_note}`;
-        }
-
-        // Auto-restock destination on checkpoint 10
-        if (stepNum === 10 && shipment.shipment_type === 'W2W' && shipment.status !== 'Delivered') {
-            await restockDestinationWarehouse(Number(shipment.userID), shipment.product_name, shipment.quantity);
-        }
-
-        const { error: updateErr } = await db.from('shipments')
-            .update(updatePayload)
-            .eq('id', Number(shipmentID));
-
-        if (updateErr) throw updateErr;
-
-        return res.status(200).json({
-            Success: "Transit status updated successfully.",
-            updated: updatePayload
-        });
-
-    } catch (err) {
-        return res.status(500).json({ error: "Failed to update transit status: " + err.message });
-    }
-}
-
-// 6. UPDATE TRANSIT STEP (AI Telemetry Path)
+// 5. UPDATE TRANSIT STEP
 export async function updateTransitStep(req, res) {
     const sessionUserId = req.session?.userId;
     const transporterID = Number(sessionUserId || req.params.transporterID);
@@ -551,13 +421,11 @@ export async function updateTransitStep(req, res) {
 
         if (!shipment) return res.status(404).json({ error: "Assigned shipment not found." });
 
-        if (shipment.transporter_id && Number(shipment.transporter_id) !== transporterID) {
+        if (!shipment.transporter_id || Number(shipment.transporter_id) !== transporterID) {
             return res.status(403).json({ error: "Unauthorized access to this manifest." });
         }
 
-        let statusText = stepNum === 10
-            ? 'Delivered'
-            : (stepNum === 0 ? 'Cargo Picked Up — En Route' : `In Transit (Checkpoint ${stepNum}/10)`);
+        let statusText = stepNum === 10 ? 'Arrived at Destination — Awaiting Final Handover' : (stepNum === 0 ? 'Cargo Picked Up — En Route' : `In Transit (Checkpoint ${stepNum}/10)`);
         let riskScore = shipment.risk;
         let aiAction = shipment.ai_action;
 
@@ -588,10 +456,6 @@ export async function updateTransitStep(req, res) {
             }
         }
 
-        if (stepNum === 10 && shipment.shipment_type === 'W2W' && shipment.status !== 'Delivered') {
-            await restockDestinationWarehouse(Number(shipment.userID), shipment.product_name, shipment.quantity);
-        }
-
         await db.from('shipments').update({
             transit_step: stepNum,
             status: statusText,
@@ -611,7 +475,7 @@ export async function updateTransitStep(req, res) {
     }
 }
 
-// 7. GET TRANSPORTER SHIPMENTS
+// 6. GET TRANSPORTER SHIPMENTS
 export async function getTransporterShipments(req, res) {
     const sessionUserId = req.session?.userId;
     const transporterID = Number(sessionUserId || req.params.transporterID);
@@ -629,7 +493,7 @@ export async function getTransporterShipments(req, res) {
         const { data, error } = await db.from('shipments')
             .select('*')
             .eq('transporter_id', transporterID)
-            .neq('displaytotransporter', false)
+            .eq('displaytotransporter', true)
             .or('accepted_by_origin.eq.true,is_w2w_confirmed.eq.true')
             .order('id', { ascending: false });
 
@@ -644,7 +508,7 @@ export async function getTransporterShipments(req, res) {
     }
 }
 
-// 8. WAREHOUSE CANCEL SHIPMENT
+// 7. WAREHOUSE REJECT / CANCEL SHIPMENT
 export async function cancelWarehouseShipment(req, res) {
     const sessionUserId = req.session?.userId;
     const warehouseID = Number(sessionUserId || req.params.userID);
@@ -672,7 +536,7 @@ export async function cancelWarehouseShipment(req, res) {
             return res.status(400).json({ error: "Cannot cancel a delivered shipment." });
         }
 
-        if (shipment.is_picked_up) {
+        if (shipment.accepted_by_origin) {
             const { data: inv } = await db.from('inventory')
                 .select('*')
                 .eq('warehouseID', warehouseID)
@@ -697,13 +561,13 @@ export async function cancelWarehouseShipment(req, res) {
             transit_step: 0
         }).eq('id', Number(shipmentID));
 
-        return res.status(200).json({ Success: "Shipment cancelled." });
+        return res.status(200).json({ Success: "Shipment cancelled. Stock rolled back if previously reserved." });
     } catch (err) {
         return res.status(500).json({ error: "Failed to cancel shipment: " + err.message });
     }
 }
 
-// 9. TRANSPORTER EMERGENCY INCIDENT / ABORT
+// 8. TRANSPORTER EMERGENCY INCIDENT / ABORT
 export async function cancelTransporterShipment(req, res) {
     const sessionUserId = req.session?.userId;
     const transporterID = Number(sessionUserId || req.params.transporterID);
@@ -723,7 +587,7 @@ export async function cancelTransporterShipment(req, res) {
             return res.status(404).json({ error: "Assigned cargo run not found." });
         }
 
-        if (shipment.transporter_id && Number(shipment.transporter_id) !== transporterID) {
+        if (!shipment.transporter_id || Number(shipment.transporter_id) !== transporterID) {
             return res.status(403).json({ error: "Unauthorized access to this manifest." });
         }
 
@@ -745,7 +609,7 @@ export async function cancelTransporterShipment(req, res) {
     }
 }
 
-// 10. CLEAR TRANSPORTER RECORD (Soft Delete)
+// 9. CLEAR TRANSPORTER RECORD (Soft Delete for Transporter)
 export async function clearTransporterShipment(req, res) {
     const sessionUserId = req.session?.userId;
     const { id } = req.params;
@@ -765,7 +629,7 @@ export async function clearTransporterShipment(req, res) {
     }
 }
 
-// 11. GENERAL QUERY & INVENTORY ENDPOINTS
+// 10. GENERAL QUERY & INVENTORY ENDPOINTS
 export async function getGlobalInventoryMatrix(req, res) {
     try {
         const { data: warehouses } = await db.from('users').select('userID, username').eq('role', 'warehouse');
@@ -883,7 +747,6 @@ export async function clearShipment(req, res) {
     }
 }
 
-// 12. FINALIZE & PURGE (Called on "CONFIRM DELIVERY & COMPLETE")
 export async function finalizeDeliveryAndPurge(req, res) {
     const sessionUserId = req.session?.userId;
     const transporterID = Number(sessionUserId || req.params.transporterID);
@@ -901,21 +764,112 @@ export async function finalizeDeliveryAndPurge(req, res) {
 
         if (sErr || !shipment) return res.status(404).json({ error: "Shipment record not found." });
 
-        if (shipment.transporter_id && Number(shipment.transporter_id) !== transporterID) {
+        if (!shipment.transporter_id || Number(shipment.transporter_id) !== transporterID) {
             return res.status(403).json({ error: "Unauthorized: You are not assigned to this delivery." });
         }
 
-        // Restock on finalize if not already done
-        if (shipment.shipment_type === 'W2W' && shipment.status !== 'Delivered') {
-            await restockDestinationWarehouse(Number(shipment.userID), shipment.product_name, shipment.quantity);
+        if (shipment.shipment_type === 'W2W') {
+            const destWarehouseID = Number(shipment.userID);
+
+            const { data: destInv } = await db.from('inventory')
+                .select('*')
+                .eq('warehouseID', destWarehouseID)
+                .eq('product_name', shipment.product_name)
+                .single();
+
+            if (destInv) {
+                const updatedStock = destInv.current_stock + shipment.quantity;
+                await db.from('inventory').update({
+                    current_stock: updatedStock,
+                    restocking_needed: updatedStock <= destInv.min_threshold
+                }).eq('id', destInv.id);
+            } else {
+                await db.from('inventory').insert({
+                    warehouseID: destWarehouseID,
+                    product_name: shipment.product_name,
+                    current_stock: shipment.quantity,
+                    min_threshold: 10,
+                    category: 'General',
+                    restocking_needed: false
+                });
+            }
         }
 
         await db.from('shipments').delete().eq('id', Number(shipmentID));
 
-        return res.status(200).json({
-            Success: "Shipment delivered. Destination inventory restocked and record cleared."
+        return res.status(200).json({ 
+            Success: "Shipment delivered. Destination inventory restocked and record cleared." 
         });
     } catch (err) {
         return res.status(500).json({ error: "Failed to finalize delivery: " + err.message });
+    }
+}
+
+export async function updateTransporterManualStatus(req, res) {
+    const sessionUserId = req.session?.userId;
+    const transporterID = Number(sessionUserId || req.params.transporterID);
+    const { shipmentID, step, status_text, driver_note } = req.body;
+
+    if (!sessionUserId) {
+        return res.status(401).json({ error: "Unauthorized: Active driver session not found." });
+    }
+
+    if (!shipmentID) {
+        return res.status(400).json({ error: "Shipment ID is required." });
+    }
+
+    try {
+        // 1. Verify that the shipment exists and is assigned to this driver
+        const { data: shipment, error: sErr } = await db.from('shipments')
+            .select('*')
+            .eq('id', Number(shipmentID))
+            .single();
+
+        if (sErr || !shipment) {
+            return res.status(404).json({ error: "Shipment manifest not found." });
+        }
+
+        if (!shipment.transporter_id || Number(shipment.transporter_id) !== transporterID) {
+            return res.status(403).json({ error: "Unauthorized: You are not assigned to this cargo run." });
+        }
+
+        // 2. Prepare payload without AI inference overhead
+        const updatePayload = {};
+
+        if (step !== undefined) {
+            const stepNum = Number(step);
+            if (stepNum >= 0 && stepNum <= 10) {
+                updatePayload.transit_step = stepNum;
+            }
+        }
+
+        if (status_text) {
+            updatePayload.status = status_text;
+        } else if (step !== undefined) {
+            updatePayload.status = step === 10 
+                ? 'Arrived at Destination — Awaiting Final Handover' 
+                : `In Transit (Checkpoint ${step}/10)`;
+        }
+
+        // Overwrite or append operational notes directly into ai_action / status
+        if (driver_note) {
+            updatePayload.ai_action = `Driver Update: ${driver_note}`;
+        }
+
+        // 3. Directly update Supabase
+        const { error: updateErr } = await db.from('shipments')
+            .update(updatePayload)
+            .eq('id', Number(shipmentID));
+
+        if (updateErr) throw updateErr;
+
+        return res.status(200).json({
+            Success: "Transit status updated successfully.",
+            updated: updatePayload
+        });
+
+    } catch (err) {
+        console.error("Transporter update error:", err.message);
+        return res.status(500).json({ error: "Failed to update transit status: " + err.message });
     }
 }
