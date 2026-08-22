@@ -58,6 +58,7 @@ export default function MapContainerComponent({ shipments }: { shipments: any[] 
               step={s.transit_step || 0}
               isPickedUp={Boolean(s.is_picked_up || s.transit_step > 0)}
               status={s.status}
+              risk={s.risk || 'Low'}
               viewContext="standard"
             />
           </React.Fragment>

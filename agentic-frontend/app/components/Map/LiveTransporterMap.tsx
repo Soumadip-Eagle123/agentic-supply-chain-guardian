@@ -1,5 +1,4 @@
 'use client';
-
 import React from 'react';
 import { MapContainer, TileLayer } from 'react-leaflet';
 import RoutePath from './RoutePath';
@@ -13,6 +12,7 @@ interface LiveTransporterMapProps {
   isPickedUp?: boolean;
   label: string;
   status: string;
+  risk?: string;
 }
 
 export default function LiveTransporterMap({
@@ -22,7 +22,8 @@ export default function LiveTransporterMap({
   transitStep,
   isPickedUp = false,
   label,
-  status
+  status,
+  risk = 'Low'
 }: LiveTransporterMapProps) {
   const centerLat = (sourceCoords[0] + destCoords[0]) / 2;
   const centerLng = (sourceCoords[1] + destCoords[1]) / 2;
@@ -48,6 +49,7 @@ export default function LiveTransporterMap({
           step={transitStep}
           isPickedUp={isPickedUp}
           status={status}
+          risk={risk}
           viewContext="transporter"
         />
       </MapContainer>

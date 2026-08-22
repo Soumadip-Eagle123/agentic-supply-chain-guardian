@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Polyline, Marker, Popup } from 'react-leaflet';
 import L from 'leaflet';
 
@@ -13,6 +13,7 @@ interface RoutePathProps {
   step?: number; // 0 to 10
   isPickedUp?: boolean;
   status: string;
+  risk?: string;
   viewContext?: 'transporter' | 'standard';
 }
 
@@ -38,31 +39,125 @@ export default function RoutePath({
   step = 0,
   isPickedUp = false,
   status,
+  risk = 'Low',
   viewContext = 'standard',
 }: RoutePathProps) {
+  const [roadGeometry, setRoadGeometry] = useState<[number, number][]>([]);
+  const [detourGeometry, setDetourGeometry] = useState<[number, number][]>([]);
+  const [pickupGeometry, setPickupGeometry] = useState<[number, number][]>([]);
+
   const isW2W = type === 'W2W';
   const themeColor = isW2W ? '#f97316' : '#2563eb';
+  const isHighRisk = risk?.toLowerCase() === 'high';
 
-  // 1. BEFORE PICKUP: Transporter vs Standard View
+  // 1. Fetch Main Road Driving Geometry from OSRM
+  useEffect(() => {
+    if (!sourceCoords || !destCoords) return;
+
+    const fetchRoute = async () => {
+      try {
+        const url = `https://router.project-osrm.org/route/v1/driving/${sourceCoords[1]},${sourceCoords[0]};${destCoords[1]},${destCoords[0]}?overview=full&geometries=geojson`;
+        const res = await fetch(url);
+        const data = await res.json();
+
+        if (data.routes && data.routes[0]) {
+          // Convert GeoJSON [lon, lat] -> Leaflet [lat, lon]
+          const points: [number, number][] = data.routes[0].geometry.coordinates.map(
+            (c: [number, number]) => [c[1], c[0]]
+          );
+          setRoadGeometry(points);
+        } else {
+          setRoadGeometry([sourceCoords, destCoords]);
+        }
+      } catch (err) {
+        setRoadGeometry([sourceCoords, destCoords]);
+      }
+    };
+
+    fetchRoute();
+  }, [sourceCoords[0], sourceCoords[1], destCoords[0], destCoords[1]]);
+
+  // 2. Fetch Pickup Leg Geometry (Driver Base -> Origin Warehouse)
+  useEffect(() => {
+    if (isPickedUp || viewContext !== 'transporter' || !driverBaseCoords || !sourceCoords) {
+      setPickupGeometry([]);
+      return;
+    }
+
+    const fetchPickupLeg = async () => {
+      try {
+        const url = `https://router.project-osrm.org/route/v1/driving/${driverBaseCoords[1]},${driverBaseCoords[0]};${sourceCoords[1]},${sourceCoords[0]}?overview=full&geometries=geojson`;
+        const res = await fetch(url);
+        const data = await res.json();
+
+        if (data.routes && data.routes[0]) {
+          const points: [number, number][] = data.routes[0].geometry.coordinates.map(
+            (c: [number, number]) => [c[1], c[0]]
+          );
+          setPickupGeometry(points);
+        } else {
+          setPickupGeometry([driverBaseCoords, sourceCoords]);
+        }
+      } catch {
+        setPickupGeometry([driverBaseCoords, sourceCoords]);
+      }
+    };
+
+    fetchPickupLeg();
+  }, [isPickedUp, viewContext, driverBaseCoords, sourceCoords]);
+
+  // 3. Fetch Alternate Detour Path on High Risk Hazard
+  useEffect(() => {
+    if (!isHighRisk || !sourceCoords || !destCoords) {
+      setDetourGeometry([]);
+      return;
+    }
+
+    const fetchDetour = async () => {
+      try {
+        // Offset waypoint to simulate detour bypassing hazard zone
+        const midLat = (sourceCoords[0] + destCoords[0]) / 2 + 0.25;
+        const midLng = (sourceCoords[1] + destCoords[1]) / 2 + 0.25;
+
+        const url = `https://router.project-osrm.org/route/v1/driving/${sourceCoords[1]},${sourceCoords[0]};${midLng},${midLat};${destCoords[1]},${destCoords[0]}?overview=full&geometries=geojson`;
+        const res = await fetch(url);
+        const data = await res.json();
+
+        if (data.routes && data.routes[0]) {
+          const points: [number, number][] = data.routes[0].geometry.coordinates.map(
+            (c: [number, number]) => [c[1], c[0]]
+          );
+          setDetourGeometry(points);
+        }
+      } catch {
+        setDetourGeometry([]);
+      }
+    };
+
+    fetchDetour();
+  }, [isHighRisk, sourceCoords[0], sourceCoords[1], destCoords[0], destCoords[1]]);
+
+  // Pre-pickup Display
   if (!isPickedUp) {
     if (viewContext === 'transporter' && driverBaseCoords) {
       return (
         <>
-          {/* Base Station to Origin Warehouse Leg */}
-          <Polyline
-            positions={[driverBaseCoords, sourceCoords]}
-            pathOptions={{ color: '#a855f7', weight: 3, dashArray: '6, 6' }}
-          >
-            <Popup>
-              <div className="text-xs font-sans">
-                <p className="font-bold text-purple-600">Pickup Leg</p>
-                <p className="text-slate-600">En route from driver station to origin warehouse</p>
-              </div>
-            </Popup>
-          </Polyline>
+          {pickupGeometry.length > 1 && (
+            <Polyline
+              positions={pickupGeometry}
+              pathOptions={{ color: '#a855f7', weight: 4, dashArray: '6, 6' }}
+            >
+              <Popup>
+                <div className="text-xs font-sans">
+                  <p className="font-bold text-purple-600">Pickup Leg</p>
+                  <p className="text-slate-600">En route from driver depot to origin warehouse</p>
+                </div>
+              </Popup>
+            </Polyline>
+          )}
 
           <Marker position={driverBaseCoords} icon={depotIcon}>
-            <Popup><span className="text-xs font-sans font-bold">Driver Base Station</span></Popup>
+            <Popup><span className="text-xs font-sans font-bold">Driver Base Depot</span></Popup>
           </Marker>
 
           <Marker position={driverBaseCoords} icon={driverIcon}>
@@ -72,32 +167,38 @@ export default function RoutePath({
       );
     }
 
-    // Warehouse & Business map: planned route outline before pickup
     return (
       <Polyline
-        positions={[sourceCoords, destCoords]}
-        pathOptions={{ color: '#64748b', weight: 2, dashArray: '5, 8', opacity: 0.4 }}
+        positions={roadGeometry.length > 0 ? roadGeometry : [sourceCoords, destCoords]}
+        pathOptions={{ color: '#64748b', weight: 2.5, dashArray: '5, 8', opacity: 0.4 }}
       />
     );
   }
 
-  // 2. AFTER PICKUP: Progress Interpolation from 0/10 to 10/10
-  const progressRatio = Math.min(Math.max(step / 10, 0), 1);
-  const currentLat = sourceCoords[0] + progressRatio * (destCoords[0] - sourceCoords[0]);
-  const currentLng = sourceCoords[1] + progressRatio * (destCoords[1] - sourceCoords[1]);
-  const currentRiderCoords: [number, number] = [currentLat, currentLng];
+  // Slicing Road Coordinates according to transit_step
+  if (roadGeometry.length === 0) return null;
+
+  const totalPoints = roadGeometry.length;
+  const targetIndex = Math.min(
+    Math.floor((step / 10) * (totalPoints - 1)),
+    totalPoints - 1
+  );
+
+  const coveredRoad = roadGeometry.slice(0, targetIndex + 1);
+  const remainingRoad = roadGeometry.slice(targetIndex);
+  const currentRiderCoords = roadGeometry[targetIndex] || sourceCoords;
 
   return (
     <>
-      {/* Covered Distance: Solid Highlight Line */}
-      {progressRatio > 0 && (
+      {/* Covered Distance along Real Roadway */}
+      {step > 0 && coveredRoad.length > 1 && (
         <Polyline
-          positions={[sourceCoords, currentRiderCoords]}
-          pathOptions={{ color: themeColor, weight: 4, opacity: 0.95 }}
+          positions={coveredRoad}
+          pathOptions={{ color: themeColor, weight: 5, opacity: 0.95, lineJoin: 'round' }}
         >
           <Popup>
             <div className="font-sans text-xs">
-              <p className="font-bold text-blue-600 uppercase">Covered Distance</p>
+              <p className="font-bold text-blue-600 uppercase">Covered Roadway</p>
               <p className="text-slate-700">Progress: {step}/10 ({step * 10}%)</p>
               <p className="text-slate-500">{label}</p>
             </div>
@@ -105,21 +206,36 @@ export default function RoutePath({
         </Polyline>
       )}
 
-      {/* Remaining Distance: Faint Dashed Line */}
-      {progressRatio < 1 && (
+      {/* Remaining Distance along Real Roadway */}
+      {step < 10 && remainingRoad.length > 1 && (
         <Polyline
-          positions={[currentRiderCoords, destCoords]}
-          pathOptions={{ color: '#64748b', weight: 2, dashArray: '6, 8', opacity: 0.4 }}
+          positions={remainingRoad}
+          pathOptions={{ color: '#64748b', weight: 2.5, dashArray: '6, 8', opacity: 0.45 }}
         />
       )}
 
-      {/* Live Moving Transporter Vehicle Marker */}
-      {progressRatio < 1 && (
+      {/* Visual Hazard Reroute Path (Amber Dashed) */}
+      {isHighRisk && detourGeometry.length > 1 && (
+        <Polyline
+          positions={detourGeometry}
+          pathOptions={{ color: '#f59e0b', weight: 3.5, dashArray: '6, 6', opacity: 0.85 }}
+        >
+          <Popup>
+            <div className="font-sans text-xs">
+              <p className="font-bold text-amber-500 uppercase">AI Hazard Detour Suggested</p>
+              <p className="text-slate-600">Alternate highway corridor avoiding incident zone.</p>
+            </div>
+          </Popup>
+        </Polyline>
+      )}
+
+      {/* Live Transporter Marker Snapped to Road Coordinate */}
+      {step > 0 && step < 10 && (
         <Marker position={currentRiderCoords} icon={driverIcon}>
           <Popup>
             <div className="font-sans text-xs">
               <p className="font-bold text-blue-600">Live Delivery Vehicle</p>
-              <p className="text-slate-700">Progress: {step}/10 ({step * 10}%)</p>
+              <p className="text-slate-700">Checkpoint: {step}/10 ({step * 10}%)</p>
               <p className="text-slate-500">{label}</p>
             </div>
           </Popup>

@@ -1,8 +1,7 @@
 import db from '../db/db.js';
 import axios from 'axios';
 
-// Haversine formula to compute geodesic distance in Kilometers
-function calculateDistanceKm(coords1, coords2) {
+async function calculateRoadDistanceKm(coords1, coords2) {
     if (!Array.isArray(coords1) || !Array.isArray(coords2) || coords1.length < 2 || coords2.length < 2) {
         return Infinity;
     }
@@ -10,18 +9,29 @@ function calculateDistanceKm(coords1, coords2) {
     const [lat2, lon2] = coords2.map(Number);
     if (isNaN(lat1) || isNaN(lon1) || isNaN(lat2) || isNaN(lon2)) return Infinity;
 
-    const R = 6371;
-    const dLat = (lat2 - lat1) * (Math.PI / 180);
-    const dLon = (lon2 - lon1) * (Math.PI / 180);
-    const a =
-        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-        Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) *
-        Math.sin(dLon / 2) * Math.sin(dLon / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c;
+    try {
+        // Query OSRM routing matrix (expects lon,lat)
+        const url = `https://router.project-osrm.org/route/v1/driving/${lon1},${lat1};${lon2},${lat2}?overview=false`;
+        const res = await axios.get(url, { timeout: 3000 });
+        
+        if (res.data?.routes?.[0]?.distance) {
+            // OSRM returns distance in meters -> convert to km
+            return res.data.routes[0].distance / 1000;
+        }
+    } catch {
+        // Fallback to Haversine straight-line if OSRM service times out
+        const R = 6371;
+        const dLat = (lat2 - lat1) * (Math.PI / 180);
+        const dLon = (lon2 - lon1) * (Math.PI / 180);
+        const a =
+            Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) *
+            Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
 }
 
-// Find closest available transporter relative to origin warehouse
+// Find closest transporter based on physical driving distance
 async function findClosestTransporter(warehouseCoords) {
     try {
         const { data: transporters, error } = await db
@@ -29,10 +39,7 @@ async function findClosestTransporter(warehouseCoords) {
             .select('userID, username, location_coords')
             .eq('role', 'transporter');
 
-        if (error || !transporters || transporters.length === 0) {
-            console.warn("[TRANSPORTER MATCH]: No registered transporters found.");
-            return null;
-        }
+        if (error || !transporters || transporters.length === 0) return null;
 
         let closest = null;
         let minDistance = Infinity;
@@ -40,7 +47,7 @@ async function findClosestTransporter(warehouseCoords) {
         if (Array.isArray(warehouseCoords) && warehouseCoords.length === 2) {
             for (const driver of transporters) {
                 if (Array.isArray(driver.location_coords) && driver.location_coords.length === 2) {
-                    const dist = calculateDistanceKm(warehouseCoords, driver.location_coords);
+                    const dist = await calculateRoadDistanceKm(warehouseCoords, driver.location_coords);
                     if (dist < minDistance) {
                         minDistance = dist;
                         closest = { ...driver, distanceKm: dist.toFixed(2) };
@@ -49,12 +56,7 @@ async function findClosestTransporter(warehouseCoords) {
             }
         }
 
-        if (!closest && transporters.length > 0) {
-            closest = transporters[0];
-            console.log(`[TRANSPORTER MATCH]: Defaulting to driver ${closest.username} (ID: ${closest.userID})`);
-        }
-
-        return closest;
+        return closest || transporters[0] || null;
     } catch (e) {
         console.error("[TRANSPORTER MATCH EXCEPTION]:", e.message);
         return null;
