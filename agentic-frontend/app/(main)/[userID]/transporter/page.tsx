@@ -35,16 +35,6 @@ export default function TransporterPortal({ params }: { params: Promise<{ userID
   const [driverComment, setDriverComment] = useState<string>('');
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [statusMsg, setStatusMsg] = useState<string>('');
-  
-  // NEW: Voice Telemetry State
-  const [isListening, setIsListening] = useState<boolean>(false);
-
-  // NEW: Preset Hazard Chips
-  const hazardChips = [
-    "Heavy Flooding",
-    "Highway Blockade",
-    "Mechanical Breakdown"
-  ];
 
   const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
 
@@ -102,6 +92,7 @@ export default function TransporterPortal({ params }: { params: Promise<{ userID
     }
   };
 
+  // Checkpoint & Driver Comment Update (Fast path without AI latency)
   const handleStepSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedRun) return;
@@ -134,6 +125,7 @@ export default function TransporterPortal({ params }: { params: Promise<{ userID
     }
   };
 
+  // Finalize Delivery & Restock Destination Warehouse
   const handleFinalizeAndPurge = async () => {
     if (!selectedRun) return;
     if (!confirm(`Confirm delivery and finalize shipment #${selectedRun.id}?`)) return;
@@ -159,6 +151,7 @@ export default function TransporterPortal({ params }: { params: Promise<{ userID
     }
   };
 
+  // Soft Clear from Transporter View
   const handleClearRun = async (shipmentID: number, e: React.MouseEvent) => {
     e.stopPropagation();
     try {
@@ -172,41 +165,6 @@ export default function TransporterPortal({ params }: { params: Promise<{ userID
       }
     } catch (err) {
       alert("Clearance failed.");
-    }
-  };
-
-  // NEW: Voice Recording Toggle Logic
-  const toggleVoiceRecording = () => {
-    const SpeechRecognition = window.SpeechRecognition || (window as any).webkitSpeechRecognition;
-    
-    if (!SpeechRecognition) {
-      alert("Voice input is not supported in this browser. Please use Chrome or Edge.");
-      return;
-    }
-
-    const recognition = new SpeechRecognition();
-    recognition.lang = 'en-US';
-    recognition.interimResults = false;
-    recognition.continuous = false;
-
-    recognition.onstart = () => setIsListening(true);
-    
-    recognition.onresult = (event: any) => {
-      const transcript = event.results[0][0].transcript;
-      setDriverComment(transcript);
-    };
-    
-    recognition.onerror = (event: any) => {
-      console.error("Speech recognition error:", event.error);
-      setIsListening(false);
-    };
-    
-    recognition.onend = () => setIsListening(false);
-
-    if (isListening) {
-      recognition.stop();
-    } else {
-      recognition.start();
     }
   };
 
@@ -268,6 +226,7 @@ export default function TransporterPortal({ params }: { params: Promise<{ userID
                           : 'border-slate-800 bg-slate-900/40 text-slate-400 hover:border-slate-700'
                       }`}
                     >
+                      {/* Soft Clear Button */}
                       <button
                         onClick={(e) => handleClearRun(r.id, e)}
                         className="absolute top-3.5 right-3 p-1 rounded-lg bg-slate-950/60 text-slate-400 hover:text-white hover:bg-red-500/20 transition-all"
@@ -314,6 +273,7 @@ export default function TransporterPortal({ params }: { params: Promise<{ userID
 
             {selectedRun && (
               <>
+                {/* Transit Note & Operational Instructions Banner */}
                 <div className="p-4 rounded-2xl border border-slate-800 bg-slate-900/60 text-slate-300">
                   <div className="flex items-start gap-3">
                     <div className="p-2 rounded-xl bg-slate-950 shrink-0 mt-0.5 border border-slate-800 text-blue-400">
@@ -330,6 +290,7 @@ export default function TransporterPortal({ params }: { params: Promise<{ userID
                   </div>
                 </div>
 
+                {/* Pickup & Checkpoint Forms */}
                 <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-6 space-y-5">
                   <div className="flex justify-between items-start border-b border-slate-800 pb-3">
                     <div>
@@ -388,49 +349,19 @@ export default function TransporterPortal({ params }: { params: Promise<{ userID
                         </div>
                       </div>
 
-                      {/* UPDATED: Driver Comments, Voice Mic & Hazard Chips */}
-                      <div className="space-y-3 mt-4">
+                      {/* Driver Comments & Notes Field */}
+                      <div className="space-y-1.5">
                         <label className="text-xs font-bold text-slate-400 flex items-center gap-1.5">
                           <MessageSquare size={14} className="text-blue-400" />
-                          Driver Remarks / Hazard Report (Optional)
+                          Driver Remarks / Status Comment (Optional)
                         </label>
-                        
-                        {/* Hazard Chips */}
-                        <div className="flex flex-wrap gap-2 mb-2">
-                          {hazardChips.map((chip) => (
-                            <button
-                              key={chip}
-                              type="button"
-                              onClick={() => setDriverComment(chip)}
-                              className="px-3 py-1.5 text-[10px] uppercase font-bold tracking-wider bg-slate-900 border border-slate-700 text-slate-300 rounded-lg hover:bg-slate-800 hover:text-white transition-colors"
-                            >
-                              {chip}
-                            </button>
-                          ))}
-                        </div>
-
-                        {/* Input & Mic Button Row */}
-                        <div className="flex gap-2">
-                          <input
-                            type="text"
-                            placeholder="e.g., Passing toll plaza / slight traffic delay"
-                            value={driverComment}
-                            onChange={(e) => setDriverComment(e.target.value)}
-                            className="flex-1 bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white focus:border-blue-500 outline-none font-mono"
-                          />
-                          <button
-                            type="button"
-                            onClick={toggleVoiceRecording}
-                            className={`px-4 rounded-xl flex items-center justify-center transition-colors border ${
-                              isListening
-                                ? "bg-red-500/20 border-red-500 text-red-400 animate-pulse shadow-[0_0_15px_rgba(239,68,68,0.3)]"
-                                : "bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800 hover:text-white"
-                            }`}
-                            title="Tap to speak"
-                          >
-                            {isListening ? "🎙️..." : "🎤"}
-                          </button>
-                        </div>
+                        <input
+                          type="text"
+                          placeholder="e.g., Passing toll plaza / slight traffic delay / reached halfway mark"
+                          value={driverComment}
+                          onChange={(e) => setDriverComment(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white focus:border-blue-500 outline-none font-mono"
+                        />
                       </div>
 
                       {statusMsg && (
@@ -440,6 +371,7 @@ export default function TransporterPortal({ params }: { params: Promise<{ userID
                       )}
 
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+                        {/* Fast Checkpoint Update */}
                         <button
                           type="submit"
                           disabled={isProcessing}
@@ -449,6 +381,7 @@ export default function TransporterPortal({ params }: { params: Promise<{ userID
                           UPDATE PROGRESS & REMARKS
                         </button>
 
+                        {/* Finalize Delivery */}
                         <button
                           type="button"
                           onClick={handleFinalizeAndPurge}
