@@ -9,3 +9,4 @@ __pycache__/
 agentic-frontend/.next/
 agentic-frontend/node_modules/
 **/*/*.lock
+ai-service/ai-services/
